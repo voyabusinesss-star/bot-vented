@@ -1,0 +1,17 @@
+[project]
+name = "vinted-bot"
+version = "0.1.0"
+description = "Bot de scraping Vinted — récupération d'annonces"
+readme = "README.md"
+authors = [
+    { name = "Faustin", email = "Faustin@Vintify.com" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+vinted-bot = "vinted_bot:main"
+
+[build-system]
+requires = ["uv_build>=0.11.30,<0.12.0"]
+build-backend = "uv_build"
