@@ -54,6 +54,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ouvre le navigateur en mode visible (debug)",
     )
 
+    sub.add_parser(
+        "discord-test",
+        help="Envoie un embed de test dans le salon regroupement (DISCORD_CHANNEL_ALL)",
+    )
+
     return parser
 
 
@@ -141,11 +146,13 @@ def cmd_scrape(args, log) -> None:
         query=result.query,
         found=result.items_found,
         upserted=result.items_upserted,
+        posted_discord=result.items_posted_discord,
         run_id=result.scrape_run_id,
     )
     print(
         f"OK — query={result.query!r} "
         f"found={result.items_found} upserted={result.items_upserted} "
+        f"discord={result.items_posted_discord} "
         f"run_id={result.scrape_run_id}"
     )
     for item in result.items[:5]:
@@ -157,6 +164,24 @@ def cmd_scrape(args, log) -> None:
         print(f"  - [{item.vinted_id}] {item.title} — {price}")
     if result.items_found > 5:
         print(f"  ... +{result.items_found - 5} autres")
+
+
+def cmd_discord_test(log) -> None:
+    from vinted_bot.notify.discord import DiscordNotifier
+
+    settings = get_settings()
+    if not settings.discord_ready():
+        print(
+            "Discord non configuré. Remplis DISCORD_BOT_TOKEN, "
+            "DISCORD_CHANNEL_ALL et au moins un canal marque "
+            "(ex. DISCORD_CHANNEL_NIKE) dans .env (voir README)."
+        )
+        return
+
+    with DiscordNotifier(settings) as notifier:
+        notifier.post_test_message()
+    log.info("discord_test_ok")
+    print("OK — message de test envoyé dans le salon regroupement (#all)")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -178,6 +203,9 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "scrape":
         cmd_scrape(args, log)
+        return
+    if args.command == "discord-test":
+        cmd_discord_test(log)
         return
 
     parser.print_help()

@@ -55,6 +55,9 @@ class Listing(Base):
     disappeared_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    discord_posted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     raw_json: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
 

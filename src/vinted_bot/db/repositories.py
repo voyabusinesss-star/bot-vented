@@ -7,7 +7,7 @@ from typing import Any, Optional, Sequence
 
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from vinted_bot.db.models import Checkpoint, Listing, Photo, ScrapeRun
 
@@ -91,6 +91,33 @@ def upsert_listing(
 
 def get_listing_by_vinted_id(session: Session, vinted_id: int) -> Listing | None:
     return session.scalar(select(Listing).where(Listing.vinted_id == vinted_id))
+
+
+def get_unposted_listings_by_vinted_ids(
+    session: Session, vinted_ids: Sequence[int]
+) -> list[Listing]:
+    if not vinted_ids:
+        return []
+    stmt = (
+        select(Listing)
+        .options(selectinload(Listing.photos))
+        .where(Listing.vinted_id.in_(list(vinted_ids)))
+        .where(Listing.discord_posted_at.is_(None))
+        .order_by(Listing.id)
+    )
+    return list(session.scalars(stmt).unique().all())
+
+
+def mark_discord_posted(session: Session, listing_ids: Sequence[int]) -> None:
+    if not listing_ids:
+        return
+    now = _utcnow()
+    listings = session.scalars(
+        select(Listing).where(Listing.id.in_(list(listing_ids)))
+    ).all()
+    for listing in listings:
+        listing.discord_posted_at = now
+    session.flush()
 
 
 def create_scrape_run(session: Session, query: str | None = None) -> ScrapeRun:

@@ -10,9 +10,12 @@ from vinted_bot.db.models import ScrapeRun
 from vinted_bot.db.repositories import (
     create_scrape_run,
     finish_scrape_run,
+    get_unposted_listings_by_vinted_ids,
+    mark_discord_posted,
     upsert_listing,
 )
 from vinted_bot.db.session import session_scope
+from vinted_bot.notify.discord import is_allowed_brand, publish_listings_to_discord
 from vinted_bot.parsers.search import SearchItem, parse_catalog_payload
 from vinted_bot.utils.logging import get_logger
 
@@ -24,6 +27,7 @@ class ScrapeSearchResult:
     query: str
     items_found: int
     items_upserted: int
+    items_posted_discord: int
     scrape_run_id: int
     items: list[SearchItem]
 
@@ -45,6 +49,7 @@ def scrape_search_once(
 
     items: list[SearchItem] = []
     upserted = 0
+    posted = 0
 
     try:
         with vinted_browser(
@@ -54,8 +59,24 @@ def scrape_search_once(
         ) as browser:
             browser.warm_up()
             payload = browser.search_catalog(query, page=1, per_page=per_page)
-            items = parse_catalog_payload(payload, base_url=base)[:max_items]
-            log.info("search_parsed", query=query, count=len(items))
+            raw_items = parse_catalog_payload(payload, base_url=base)[:max_items]
+            brand_map = settings.brand_channel_map()
+            if brand_map:
+                items = [
+                    item
+                    for item in raw_items
+                    if is_allowed_brand(item.brand, brand_map)
+                ]
+                skipped = len(raw_items) - len(items)
+            else:
+                items = raw_items
+                skipped = 0
+            log.info(
+                "search_parsed",
+                query=query,
+                count=len(items),
+                skipped_unwanted_brands=skipped,
+            )
 
             with session_scope() as session:
                 for item in items:
@@ -98,10 +119,40 @@ def scrape_search_once(
             items_upserted=upserted,
         )
 
+    # Auto-post Discord : uniquement les annonces encore jamais postées
+    vinted_ids = [item.vinted_id for item in items]
+    with session_scope() as session:
+        unposted = get_unposted_listings_by_vinted_ids(session, vinted_ids)
+        for listing in unposted:
+            for photo in list(listing.photos):
+                session.expunge(photo)
+            session.expunge(listing)
+
+    posted_ids = publish_listings_to_discord(
+        unposted,
+        query=query,
+        items_found=len(items),
+        items_upserted=upserted,
+        scrape_run_id=run_id,
+        settings=settings,
+    )
+    posted = len(posted_ids)
+    if posted_ids:
+        with session_scope() as session:
+            mark_discord_posted(session, posted_ids)
+
+    log.info(
+        "discord_publish_done",
+        query=query,
+        unposted=len(unposted),
+        posted=posted,
+    )
+
     return ScrapeSearchResult(
         query=query,
         items_found=len(items),
         items_upserted=upserted,
+        items_posted_discord=posted,
         scrape_run_id=run_id,
         items=items,
     )
