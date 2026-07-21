@@ -1,0 +1,24 @@
+{
+  "items": [
+    {
+      "id": 123456789,
+      "title": "Nike Air Max 90",
+      "price": {"amount": "45.00", "currency_code": "EUR"},
+      "brand_title": "Nike",
+      "size_title": "42",
+      "url": "/items/123456789-nike-air-max-90",
+      "photo": {
+        "url": "https://images.example.com/photo1.jpg"
+      }
+    },
+    {
+      "id": 987654321,
+      "title": "Adidas Samba",
+      "price": {"amount": "30.50", "currency_code": "EUR"},
+      "brand_title": "Adidas",
+      "size_title": "41",
+      "path": "/items/987654321-adidas-samba",
+      "photos": [{"url": "https://images.example.com/photo2.jpg"}]
+    }
+  ]
+}
