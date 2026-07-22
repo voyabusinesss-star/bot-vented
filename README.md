@@ -30,31 +30,19 @@ uv run vinted-bot db-seed
 
 ## Discord — setup manuel
 
-1. Créer un serveur Discord (ex. `Vintify Alerts`)
-2. Créer les canaux marque : `#nike`, `#adidas`, … (seulement les marques suivies)
-3. Créer un salon regroupement (ex. `#toutes-annonces`) — reçoit une copie de chaque post marque
-4. Créer `#logs` (optionnel) pour les résumés de scrape
-5. Créer le bot sur [Discord Developer Portal](https://discord.com/developers/applications), inviter avec permissions Send Messages / Embed Links / View Channels
-6. Mode développeur ON → copier les IDs de canaux
-7. Remplir `.env` :
-
-```env
-DISCORD_ENABLED=true
-DISCORD_BOT_TOKEN=ton_token
-DISCORD_CHANNEL_NIKE=...
-DISCORD_CHANNEL_ADIDAS=...
-DISCORD_CHANNEL_ALL=...
-DISCORD_CHANNEL_LOGS=...
-```
-
-Les marques **sans** canal dédié sont ignorées (ni DB, ni Discord).
-
-8. Tester :
+1. Créer un serveur Discord + canaux marque (ex. catégorie `les-classiques`)
+2. Créer `#all-vetement` (salon regroupement)
+3. Créer le bot, l'inviter (Send Messages / Embed Links / View Channels)
+4. Mode développeur ON → copier les **IDs numériques** des salons
+5. Remplir `.env` (`DISCORD_CHANNEL_*`) — voir `.env.example` pour la liste complète
+6. Tester :
 
 ```bash
 uv run vinted-bot discord-test
 uv run vinted-bot scrape --query "nike" --once --max-items 5
 ```
+
+Seules les marques avec un ID renseigné sont scrapées/postées.
 
 ## Commandes utiles
 
@@ -65,8 +53,13 @@ uv run vinted-bot db-check
 uv run vinted-bot db-seed
 uv run vinted-bot discord-test
 uv run vinted-bot scrape --query "nike" --once --max-items 10
+uv run vinted-bot scrape --all --once --max-items 5
+uv run vinted-bot scrape --loop
 uv run pytest
 ```
+
+Les recherches se configurent dans [`config/searches.yaml`](config/searches.yaml) (query + marque + filtres optionnels), les IDs Discord restent dans `.env`.
+Mode 24/7 : `scrape --loop` (intervalle / restart navigateur dans le YAML).
 
 ## Structure
 

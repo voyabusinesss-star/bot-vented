@@ -1,0 +1,174 @@
+# Recherches à scraper.
+# Pour ajouter une marque : entrée ici + DISCORD_CHANNEL_* dans .env
+#
+# priority: high | medium | low  (fréquence via section priorities)
+# optionnel: brand_ids, catalog_ids, every_n_cycles, extra_passes, max_items
+# Par défaut catalog_ids = [4, 5] (vêtements F/H) → pas de chaussures.
+
+priorities:
+  # Flux continu : toutes les marques chaque cycle (plus de file d'attente → rafale)
+  high:
+    every_n_cycles: 1
+    extra_passes: 0
+    max_items: 4
+    max_discord_posts: 2
+  medium:
+    every_n_cycles: 1
+    extra_passes: 0
+    max_items: 3
+    max_discord_posts: 2
+  low:
+    every_n_cycles: 1
+    extra_passes: 0
+    max_items: 2
+    max_discord_posts: 1
+
+searches:
+  # --- Priorité élevée (forte concurrence) ---
+  - brand: nike
+    query: nike
+    priority: high
+    enabled: true
+  - brand: adidas
+    query: adidas
+    priority: high
+    enabled: true
+  - brand: the north face
+    query: the north face
+    priority: high
+    enabled: true
+  - brand: carhartt
+    query: carhartt
+    priority: high
+    enabled: true
+  - brand: ralph lauren
+    query: ralph lauren
+    priority: high
+    enabled: true
+
+  # --- Priorité moyenne ---
+  - brand: stone island
+    query: stone island
+    priority: medium
+    enabled: true
+  - brand: stussy
+    query: stussy
+    priority: medium
+    enabled: true
+  - brand: lacoste
+    query: lacoste
+    priority: medium
+    enabled: true
+  - brand: tommy hilfiger
+    query: tommy hilfiger
+    priority: medium
+    enabled: true
+
+  # --- Priorité basse (moins de volume) ---
+  - brand: dickies
+    query: dickies
+    priority: low
+    enabled: true
+  - brand: under armour
+    query: under armour
+    priority: low
+    enabled: true
+  - brand: supreme
+    query: supreme
+    priority: low
+    enabled: true
+  - brand: levis
+    query: levis
+    priority: low
+    enabled: true
+  - brand: ami paris
+    query: ami paris
+    priority: low
+    enabled: true
+  - brand: the kooples
+    query: the kooples
+    priority: low
+    enabled: true
+  - brand: columbia
+    query: columbia
+    priority: low
+    enabled: true
+
+  # --- Luxe revente (forte valeur) ---
+  - brand: moncler
+    query: moncler
+    priority: high
+    enabled: true
+  - brand: louis vuitton
+    query: louis vuitton
+    priority: high
+    enabled: true
+  - brand: prada
+    query: prada
+    priority: high
+    enabled: true
+  - brand: hermes
+    query: hermes
+    priority: high
+    enabled: true
+  - brand: saint laurent
+    query: saint laurent
+    priority: high
+    enabled: true
+  - brand: celine
+    query: celine
+    priority: medium
+    enabled: true
+  - brand: fendi
+    query: fendi
+    priority: medium
+    enabled: true
+  - brand: burberry
+    query: burberry
+    priority: medium
+    enabled: true
+  - brand: givenchy
+    query: givenchy
+    priority: medium
+    enabled: true
+  - brand: loewe
+    query: loewe
+    priority: medium
+    enabled: true
+  - brand: jacquemus
+    query: jacquemus
+    priority: medium
+    enabled: true
+  - brand: acne studios
+    query: acne studios
+    priority: low
+    enabled: true
+  - brand: toteme
+    query: toteme
+    priority: low
+    enabled: true
+  - brand: ganni
+    query: ganni
+    priority: low
+    enabled: true
+  - brand: comme des garcons
+    query: comme des garcons
+    priority: low
+    enabled: true
+
+defaults:
+  max_items: 4
+  # Pause courte entre marques (évite de “batcher” artificiellement)
+  delay_between_searches_seconds: 0.4
+  # Pause courte entre cycles — le scrape tourne quasi en continu
+  loop_interval_seconds: 15
+  browser_restart_every_cycles: 20
+  reconnect_delay_seconds: 20
+  # Alerte si un cycle dure > factor * moyenne mobile
+  slow_cycle_factor: 2.0
+  order: newest_first
+  # Vêtements uniquement (pas chaussures / sacs / accessoires)
+  # 4 = Femmes > Vêtements, 5 = Hommes > Vêtements
+  catalog_ids: [4, 5]
+  # Max posts Discord par marque et passage (reste marqué vu, pas de backlog)
+  max_discord_posts: 2

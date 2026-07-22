@@ -16,6 +16,11 @@ from vinted_bot.utils.logging import get_logger
 log = get_logger(__name__)
 
 DISCORD_API = "https://discord.com/api/v10"
+EMBED_COLOR = 0x2B2D31  # proche du style sombre type "Vinted Plug"
+
+# Approximation frais protection acheteur (affichage TTC indicatif)
+_TTC_FIXED_CENTS = 70
+_TTC_RATE = 0.05
 
 
 def normalize_brand(brand: str | None) -> str:
@@ -24,9 +29,26 @@ def normalize_brand(brand: str | None) -> str:
     text = unicodedata.normalize("NFKD", brand)
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
     text = text.lower().strip()
+    # tirets / underscores → espaces (ex. stone-island, ralph_lauren)
+    text = text.replace("-", " ").replace("_", " ")
     text = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in text)
     text = " ".join(text.split())
-    return text
+    # alias fréquents
+    aliases = {
+        "levi s": "levis",
+        "levis": "levis",
+        "ami": "ami paris",
+        "tnf": "the north face",
+        "north face": "the north face",
+        "lv": "louis vuitton",
+        "ysl": "saint laurent",
+        "st laurent": "saint laurent",
+        "yves saint laurent": "saint laurent",
+        "acne studio": "acne studios",
+        "cdg": "comme des garcons",
+        "comme des garcons play": "comme des garcons",
+    }
+    return aliases.get(text, text)
 
 
 def route_channel(brand: str | None, channel_map: dict[str, str]) -> str | None:
@@ -46,33 +68,236 @@ def is_allowed_brand(brand: str | None, channel_map: dict[str, str]) -> bool:
     return route_channel(brand, channel_map) is not None
 
 
-def build_listing_embed(listing: Listing) -> dict[str, Any]:
-    price = (
-        f"{listing.price_cents / 100:.2f} {listing.currency}"
-        if listing.price_cents is not None
-        else "N/A"
-    )
-    fields = [
-        {"name": "Prix", "value": price, "inline": True},
-        {"name": "Marque", "value": listing.brand or "—", "inline": True},
-        {"name": "Taille", "value": listing.size or "—", "inline": True},
-    ]
-    if listing.condition:
-        fields.append(
-            {"name": "État", "value": listing.condition, "inline": True}
-        )
+def _raw(listing: Listing) -> dict[str, Any]:
+    return listing.raw_json if isinstance(listing.raw_json, dict) else {}
 
-    embed: dict[str, Any] = {
+
+def _seller_info(listing: Listing) -> tuple[str | None, str | None]:
+    raw = _raw(listing)
+    user = raw.get("user") or raw.get("seller") or {}
+    if not isinstance(user, dict):
+        return None, None
+    login = user.get("login") or user.get("username")
+    avatar = None
+    photo = user.get("photo") or {}
+    if isinstance(photo, dict):
+        avatar = photo.get("url") or photo.get("full_size_url")
+    return (str(login) if login else None), (str(avatar) if avatar else None)
+
+
+def _condition_label(listing: Listing) -> str:
+    if listing.condition:
+        return listing.condition
+    raw = _raw(listing)
+    for key in ("status", "status_title", "condition", "status_id"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, dict):
+            title = value.get("title") or value.get("name")
+            if title:
+                return str(title)
+    # status_id fréquents Vinted FR
+    status_id = raw.get("status_id")
+    mapping = {
+        1: "Neuf avec étiquette",
+        2: "Neuf sans étiquette",
+        3: "Très bon état",
+        4: "Bon état",
+        5: "Satisfaisant",
+        6: "État correct",
+    }
+    if isinstance(status_id, int) and status_id in mapping:
+        return mapping[status_id]
+    return "—"
+
+
+def _published_label(listing: Listing) -> str:
+    raw = _raw(listing)
+    created: Any = raw.get("created_at_ts") or raw.get("created_at")
+    photo = raw.get("photo")
+    if created is None and isinstance(photo, dict):
+        created = photo.get("high_resolution")
+        if isinstance(created, dict):
+            created = created.get("timestamp")
+        elif isinstance(created, list) and created:
+            first = created[0]
+            if isinstance(first, dict):
+                created = first.get("timestamp")
+
+    dt: datetime | None = None
+    if listing.published_at is not None:
+        dt = listing.published_at
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+    elif isinstance(created, (int, float)):
+        dt = datetime.fromtimestamp(float(created), tz=timezone.utc)
+    elif isinstance(created, str):
+        try:
+            dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+        except ValueError:
+            dt = None
+
+    if dt is None:
+        return "—"
+    now = datetime.now(timezone.utc)
+    seconds = int((now - dt.astimezone(timezone.utc)).total_seconds())
+    if seconds < 60:
+        return "à l'instant"
+    if seconds < 3600:
+        return f"il y a {seconds // 60} min"
+    if seconds < 86400:
+        return f"il y a {seconds // 3600} h"
+    return f"il y a {seconds // 86400} j"
+
+
+def _rating_label(listing: Listing) -> str:
+    raw = _raw(listing)
+    user = raw.get("user") or {}
+    if not isinstance(user, dict):
+        return "⭐⭐⭐⭐⭐ (0)"
+    feedback = (
+        user.get("feedback_reputation")
+        or user.get("feedback_rating")
+        or user.get("rating")
+    )
+    count = (
+        user.get("feedback_count")
+        or user.get("item_count")
+        or 0
+    )
+    try:
+        score = float(feedback) if feedback is not None else 0.0
+    except (TypeError, ValueError):
+        score = 0.0
+    # feedback_reputation Vinted est souvent 0..1
+    stars = 5 if score >= 0.9 else max(0, min(5, round(score * 5)))
+    if feedback is None:
+        stars = 5
+    try:
+        count_i = int(count)
+    except (TypeError, ValueError):
+        count_i = 0
+    return f"{'⭐' * stars}{'☆' * (5 - stars)} ({count_i})"
+
+
+def _price_label(listing: Listing) -> str:
+    raw = _raw(listing)
+    currency = listing.currency or "EUR"
+    price_cents = listing.price_cents
+
+    total = raw.get("total_item_price")
+    if isinstance(total, dict) and total.get("amount") is not None:
+        amount = str(total["amount"])
+        cur = total.get("currency_code") or currency
+        base = (
+            f"{price_cents / 100:.2f} {currency}"
+            if price_cents is not None
+            else f"{amount} {cur}"
+        )
+        return f"{base} | ≈ {amount} {cur} (TTC)"
+
+    if price_cents is None:
+        return "N/A"
+    base = f"{price_cents / 100:.2f} {currency}"
+    ttc_cents = int(round(price_cents * (1 + _TTC_RATE) + _TTC_FIXED_CENTS))
+    return f"{base} | ≈ {ttc_cents / 100:.2f} {currency} (TTC)"
+
+
+def _photo_urls(listing: Listing) -> list[str]:
+    urls = [p.url for p in (listing.photos or []) if p.url]
+    if urls:
+        return urls
+    raw = _raw(listing)
+    collected: list[str] = []
+    photo = raw.get("photo") or {}
+    if isinstance(photo, dict) and photo.get("url"):
+        collected.append(str(photo["url"]))
+    for p in raw.get("photos") or []:
+        if isinstance(p, dict) and p.get("url"):
+            collected.append(str(p["url"]))
+    seen: set[str] = set()
+    unique: list[str] = []
+    for url in collected:
+        if url not in seen:
+            seen.add(url)
+            unique.append(url)
+    return unique
+
+
+def build_listing_payload(listing: Listing) -> dict[str, Any]:
+    """Construit embeds + boutons style aperçu riche."""
+    seller_name, seller_avatar = _seller_info(listing)
+    photos = _photo_urls(listing)
+
+    fields = [
+        {"name": "⌛ Publié", "value": _published_label(listing), "inline": True},
+        {"name": "📕 Marque", "value": listing.brand or "—", "inline": True},
+        {"name": "📏 Taille", "value": listing.size or "—", "inline": True},
+        {"name": "🌟 Avis", "value": _rating_label(listing), "inline": True},
+        {"name": "💎 État", "value": _condition_label(listing), "inline": True},
+        {"name": "💰 Prix", "value": _price_label(listing), "inline": True},
+    ]
+
+    main: dict[str, Any] = {
         "title": listing.title[:256],
         "url": listing.url,
-        "color": 0x09B1BA,
+        "color": EMBED_COLOR,
         "fields": fields,
-        "footer": {"text": f"Vinted · id {listing.vinted_id}"},
+        "footer": {"text": "Vinted Bot"},
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
-    if listing.photos:
-        embed["thumbnail"] = {"url": listing.photos[0].url}
-    return embed
+    if seller_name:
+        author: dict[str, Any] = {"name": seller_name}
+        if seller_avatar:
+            author["icon_url"] = seller_avatar
+        main["author"] = author
+    if photos:
+        # grande image (pas une mini thumbnail)
+        main["image"] = {"url": photos[0]}
+
+    embeds: list[dict[str, Any]] = [main]
+    # images supplémentaires empilées (effet multi-photos)
+    for photo_url in photos[1:4]:
+        embeds.append(
+            {
+                "url": listing.url,
+                "color": EMBED_COLOR,
+                "image": {"url": photo_url},
+            }
+        )
+
+    components = [
+        {
+            "type": 1,
+            "components": [
+                {
+                    "type": 2,
+                    "style": 5,
+                    "label": "📄 Détails",
+                    "url": listing.url,
+                },
+                {
+                    "type": 2,
+                    "style": 5,
+                    "label": "💳 Acheter",
+                    "url": listing.url,
+                },
+                {
+                    "type": 2,
+                    "style": 5,
+                    "label": "🤝 Négocier",
+                    "url": listing.url,
+                },
+            ],
+        }
+    ]
+    return {"embeds": embeds, "components": components}
+
+
+def build_listing_embed(listing: Listing) -> dict[str, Any]:
+    """Rétrocompat : premier embed uniquement."""
+    return build_listing_payload(listing)["embeds"][0]
 
 
 def build_summary_embed(
@@ -125,10 +350,10 @@ class DiscordNotifier:
             raise RuntimeError("DiscordNotifier non démarré — utiliser with")
         return self._client
 
-    def post_embed(self, channel_id: str, embed: dict[str, Any]) -> None:
+    def post_message(self, channel_id: str, payload: dict[str, Any]) -> None:
         response = self.client.post(
             f"/channels/{channel_id}/messages",
-            json={"embeds": [embed]},
+            json=payload,
         )
         if response.status_code == 429:
             retry_after = float(response.json().get("retry_after", 2))
@@ -136,15 +361,22 @@ class DiscordNotifier:
             time.sleep(retry_after)
             response = self.client.post(
                 f"/channels/{channel_id}/messages",
-                json={"embeds": [embed]},
+                json=payload,
             )
         if response.status_code >= 400:
             raise RuntimeError(
                 f"Discord API {response.status_code}: {response.text[:400]}"
             )
 
+    def post_embed(self, channel_id: str, embed: dict[str, Any]) -> None:
+        self.post_message(channel_id, {"embeds": [embed]})
+
     def post_listing(self, listing: Listing) -> str | None:
-        """Poste dans le canal marque + le salon regroupement. Retourne l'id canal marque."""
+        """Poste canal marque (obligatoire) + #all (best-effort).
+
+        Si le post marque réussit, on considère l'annonce postée même si #all échoue
+        (évite les doublons marque au prochain run).
+        """
         brand_channel_id = route_channel(listing.brand, self.channel_map)
         if not brand_channel_id:
             log.info(
@@ -154,13 +386,20 @@ class DiscordNotifier:
             )
             return None
 
-        embed = build_listing_embed(listing)
-        self.post_embed(brand_channel_id, embed)
+        payload = build_listing_payload(listing)
+        self.post_message(brand_channel_id, payload)
 
         all_channel = self.settings.discord_channel_all.strip()
         if all_channel and all_channel != brand_channel_id:
-            time.sleep(self.settings.discord_post_delay_seconds)
-            self.post_embed(all_channel, embed)
+            try:
+                time.sleep(self.settings.discord_post_delay_seconds)
+                self.post_message(all_channel, payload)
+            except Exception as exc:
+                log.warning(
+                    "discord_all_channel_failed",
+                    vinted_id=listing.vinted_id,
+                    error=str(exc),
+                )
 
         return brand_channel_id
 
@@ -194,8 +433,8 @@ class DiscordNotifier:
         embed = {
             "title": "Test Vinted Bot",
             "description": (
-                "Connexion Discord OK — les annonces iront dans "
-                "chaque canal marque + ce salon regroupement."
+                "Connexion Discord OK — aperçu riche activé "
+                "(vendeur, champs, grande image, boutons)."
             ),
             "color": 0x5865F2,
             "timestamp": datetime.now(timezone.utc).isoformat(),

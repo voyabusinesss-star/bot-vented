@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import Any, Generator
-from urllib.parse import quote_plus, urlencode
+from typing import Any, Generator, Sequence
+from urllib.parse import urlencode
 
-from playwright.sync_api import Browser, Page, Playwright, Response, sync_playwright
+from playwright.sync_api import Browser, BrowserContext, Page, Playwright, sync_playwright
 
 from vinted_bot.utils.logging import get_logger
 from vinted_bot.utils.rate_limit import RateLimiter
@@ -14,6 +14,29 @@ from vinted_bot.utils.rate_limit import RateLimiter
 log = get_logger(__name__)
 
 DEFAULT_BASE_URL = "https://www.vinted.fr"
+
+
+def build_catalog_params(
+    query: str,
+    *,
+    page: int = 1,
+    per_page: int = 24,
+    order: str = "newest_first",
+    brand_ids: Sequence[int] | None = None,
+    catalog_ids: Sequence[int] | None = None,
+) -> list[tuple[str, str]]:
+    """Paramètres catalog Vinted (tri newest + filtres optionnels)."""
+    params: list[tuple[str, str]] = [
+        ("search_text", query),
+        ("page", str(page)),
+        ("per_page", str(per_page)),
+        ("order", order or "newest_first"),
+    ]
+    for brand_id in brand_ids or []:
+        params.append(("brand_ids[]", str(brand_id)))
+    for catalog_id in catalog_ids or []:
+        params.append(("catalog[]", str(catalog_id)))
+    return params
 
 
 class VintedBrowser:
@@ -31,12 +54,13 @@ class VintedBrowser:
         self.rate_limiter = RateLimiter(delay_seconds)
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
+        self._context: BrowserContext | None = None
         self._page: Page | None = None
 
     def start(self) -> None:
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(headless=self.headless)
-        context = self._browser.new_context(
+        self._context = self._browser.new_context(
             locale="fr-FR",
             viewport={"width": 1280, "height": 900},
             user_agent=(
@@ -45,17 +69,35 @@ class VintedBrowser:
                 "Chrome/122.0.0.0 Safari/537.36"
             ),
         )
-        self._page = context.new_page()
+        self._page = self._context.new_page()
         self._page.set_default_timeout(self.timeout_ms)
 
     def stop(self) -> None:
-        if self._browser is not None:
-            self._browser.close()
-        if self._playwright is not None:
-            self._playwright.stop()
+        try:
+            if self._context is not None:
+                self._context.close()
+        except Exception:
+            pass
+        try:
+            if self._browser is not None:
+                self._browser.close()
+        except Exception:
+            pass
+        try:
+            if self._playwright is not None:
+                self._playwright.stop()
+        except Exception:
+            pass
+        self._page = None
+        self._context = None
         self._browser = None
         self._playwright = None
-        self._page = None
+
+    def restart(self) -> None:
+        log.info("browser_restart")
+        self.stop()
+        self.start()
+        self.warm_up()
 
     @property
     def page(self) -> Page:
@@ -87,23 +129,48 @@ class VintedBrowser:
             except Exception:
                 continue
 
-    def search_catalog(self, query: str, *, page: int = 1, per_page: int = 24) -> dict[str, Any]:
+    def search_catalog(
+        self,
+        query: str,
+        *,
+        page: int = 1,
+        per_page: int = 24,
+        order: str = "newest_first",
+        brand_ids: Sequence[int] | None = None,
+        catalog_ids: Sequence[int] | None = None,
+    ) -> dict[str, Any]:
         """
-        Charge une page catalog et capture la réponse JSON /api/v2/catalog/items.
+        Récupère /api/v2/catalog/items.
+        Préfère un fetch API (rapide) ; fallback navigation page si besoin.
         """
-        params = {
-            "search_text": query,
-            "page": str(page),
-            "per_page": str(per_page),
-            "order": "newest_first",
-        }
-        search_url = f"{self.base_url}/catalog?{urlencode(params)}"
         self.rate_limiter.wait()
-        log.info("search_navigate", query=query, page=page, url=search_url)
+        params = build_catalog_params(
+            query,
+            page=page,
+            per_page=per_page,
+            order=order,
+            brand_ids=brand_ids,
+            catalog_ids=catalog_ids,
+        )
+        log.info(
+            "catalog_search",
+            query=query,
+            page=page,
+            order=order,
+            brand_ids=list(brand_ids or []),
+            catalog_ids=list(catalog_ids or []),
+        )
 
+        payload = self._fetch_catalog_via_page(params)
+        if payload is not None:
+            return payload
+
+        # Fallback : navigation catalog (plus lent)
+        search_url = f"{self.base_url}/catalog?{urlencode(params)}"
+        log.warning("catalog_fetch_fallback_navigate", url=search_url)
         catalog_payload: dict[str, Any] | None = None
 
-        def _on_response(response: Response) -> None:
+        def _on_response(response: Any) -> None:
             nonlocal catalog_payload
             if "/api/v2/catalog/items" not in response.url:
                 return
@@ -121,13 +188,9 @@ class VintedBrowser:
         self.page.on("response", _on_response)
         try:
             self.page.goto(search_url, wait_until="domcontentloaded")
-            # laisse le temps aux XHR catalog de partir
-            self.page.wait_for_timeout(2500)
+            self.page.wait_for_timeout(2000)
             if catalog_payload is None:
-                # fallback : tenter un fetch depuis le contexte page (cookies déjà là)
-                catalog_payload = self._fetch_catalog_via_page(
-                    query=query, page=page, per_page=per_page
-                )
+                catalog_payload = self._fetch_catalog_via_page(params)
         finally:
             self.page.remove_listener("response", _on_response)
 
@@ -139,14 +202,9 @@ class VintedBrowser:
         return catalog_payload
 
     def _fetch_catalog_via_page(
-        self, *, query: str, page: int, per_page: int
+        self, params: list[tuple[str, str]]
     ) -> dict[str, Any] | None:
-        api_url = (
-            f"{self.base_url}/api/v2/catalog/items?"
-            f"search_text={quote_plus(query)}&page={page}"
-            f"&per_page={per_page}&order=newest_first"
-        )
-        log.info("catalog_fetch_fallback", url=api_url)
+        api_url = f"{self.base_url}/api/v2/catalog/items?{urlencode(params)}"
         result = self.page.evaluate(
             """async (url) => {
                 const res = await fetch(url, {
@@ -168,6 +226,8 @@ class VintedBrowser:
                 status=result.get("__error"),
                 body=str(result.get("__body", ""))[:300],
             )
+            return None
+        if "items" not in result and "catalog_items" not in result:
             return None
         return result
 

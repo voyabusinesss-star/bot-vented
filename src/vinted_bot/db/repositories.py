@@ -31,9 +31,37 @@ def upsert_listing(
     raw_json: dict[str, Any] | None = None,
     photo_urls: Sequence[str] | None = None,
     is_active: bool = True,
-) -> Listing:
-    """Insert ou met à jour une annonce (dedup sur vinted_id)."""
+) -> tuple[Listing, bool]:
+    """Insert ou met à jour une annonce.
+
+    Retourne (listing, created) où created=True si nouvel insert.
+    N'écrase pas les champs optionnels avec None (préserve enrichment futur).
+    """
     now = _utcnow()
+    existing = session.scalar(select(Listing.id).where(Listing.vinted_id == vinted_id))
+    created = existing is None
+
+    set_values: dict[str, Any] = {
+        "title": title,
+        "url": url,
+        "currency": currency,
+        "is_active": is_active,
+        "disappeared_at": None if is_active else now,
+        "updated_at": now,
+    }
+    if price_cents is not None:
+        set_values["price_cents"] = price_cents
+    if brand is not None:
+        set_values["brand"] = brand
+    if size is not None:
+        set_values["size"] = size
+    if condition is not None:
+        set_values["condition"] = condition
+    if published_at is not None:
+        set_values["published_at"] = published_at
+    if raw_json is not None:
+        set_values["raw_json"] = raw_json
+
     stmt = (
         insert(Listing)
         .values(
@@ -52,41 +80,24 @@ def upsert_listing(
         )
         .on_conflict_do_update(
             index_elements=[Listing.vinted_id],
-            set_={
-                "title": title,
-                "url": url,
-                "price_cents": price_cents,
-                "currency": currency,
-                "brand": brand,
-                "size": size,
-                "condition": condition,
-                "published_at": published_at,
-                "raw_json": raw_json,
-                "is_active": is_active,
-                "disappeared_at": None if is_active else now,
-                "updated_at": now,
-            },
+            set_=set_values,
         )
         .returning(Listing.id)
     )
     listing_id = session.execute(stmt).scalar_one()
     listing = session.get(Listing, listing_id)
     assert listing is not None
-    # L'upsert SQL ne rafraîchit pas l'objet déjà en mémoire
     session.refresh(listing)
 
     if photo_urls is not None:
-        # delete SQL + expire : évite les doublons via la relation ORM
         session.execute(delete(Photo).where(Photo.listing_id == listing_id))
         session.expire(listing, ["photos"])
         session.flush()
         for position, photo_url in enumerate(photo_urls):
-            listing.photos.append(
-                Photo(url=photo_url, position=position)
-            )
+            listing.photos.append(Photo(url=photo_url, position=position))
         session.flush()
 
-    return listing
+    return listing, created
 
 
 def get_listing_by_vinted_id(session: Session, vinted_id: int) -> Listing | None:

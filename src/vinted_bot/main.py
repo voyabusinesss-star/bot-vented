@@ -34,19 +34,34 @@ def build_parser() -> argparse.ArgumentParser:
     scrape.add_argument(
         "--query",
         "-q",
-        required=True,
-        help='Texte de recherche (ex: "nike air max")',
+        help='Texte de recherche (ex: "nike"). Ignoré si --all.',
+    )
+    scrape.add_argument(
+        "--all",
+        action="store_true",
+        help="Scrape toutes les recherches de config/searches.yaml",
+    )
+    scrape.add_argument(
+        "--loop",
+        action="store_true",
+        help="Tourne en continu 24/7 (cycles automatiques)",
+    )
+    scrape.add_argument(
+        "--interval",
+        type=float,
+        default=None,
+        help="Secondes entre deux cycles --loop (défaut: searches.yaml)",
     )
     scrape.add_argument(
         "--once",
         action="store_true",
-        help="Exécute un seul passage (MVP Phase 2)",
+        help="Exécute un seul passage",
     )
     scrape.add_argument(
         "--max-items",
         type=int,
-        default=24,
-        help="Nombre max d'annonces à récupérer (défaut: 24)",
+        default=None,
+        help="Nombre max d'annonces par recherche (défaut: searches.yaml)",
     )
     scrape.add_argument(
         "--headed",
@@ -85,7 +100,7 @@ def cmd_db_seed(log) -> None:
     from vinted_bot.db.session import session_scope
 
     with session_scope() as session:
-        listing = upsert_listing(
+        listing, _ = upsert_listing(
             session,
             vinted_id=999001,
             title="Annonce test Phase 1",
@@ -100,7 +115,7 @@ def cmd_db_seed(log) -> None:
             ],
             raw_json={"source": "db-seed"},
         )
-        again = upsert_listing(
+        again, _ = upsert_listing(
             session,
             vinted_id=999001,
             title="Annonce test Phase 1 (mise à jour)",
@@ -128,30 +143,87 @@ def cmd_db_seed(log) -> None:
 
 
 def cmd_scrape(args, log) -> None:
-    if not args.once:
-        print("Pour la Phase 2, utilise --once (ex: scrape --query nike --once)")
-        return
-
-    from vinted_bot.services.scrape_search import scrape_search_once
-
     settings = get_settings()
     headless = not args.headed and settings.scrape_headless
+
+    if args.loop:
+        from vinted_bot.jobs.scheduler import run_scrape_loop
+
+        print(
+            "Démarrage boucle 24/7 — Ctrl+C pour arrêter. "
+            "Logs: loop_cycle_start / loop_cycle_done"
+        )
+        try:
+            run_scrape_loop(
+                max_items=args.max_items,
+                headless=headless,
+                interval_seconds=args.interval,
+            )
+        except KeyboardInterrupt:
+            print("\nBoucle arrêtée.")
+        return
+
+    if not args.once and not args.all:
+        print(
+            "Utilise:\n"
+            "  scrape --all --once\n"
+            "  scrape --query nike --once\n"
+            "  scrape --loop"
+        )
+        return
+
+    if args.all:
+        from vinted_bot.services.scrape_search import scrape_all_configured
+
+        results = scrape_all_configured(
+            max_items=args.max_items,
+            headless=headless,
+        )
+        if not results:
+            print("Aucune recherche active (vérifie config/searches.yaml + IDs Discord).")
+            return
+        total_created = sum(r.items_created for r in results)
+        total_posted = sum(r.items_posted_discord for r in results)
+        bootstraps = sum(1 for r in results if r.bootstrap)
+        print(
+            f"OK — searches={len(results)} created={total_created} "
+            f"discord={total_posted} bootstraps={bootstraps}"
+        )
+        for result in results:
+            flag = "bootstrap" if result.bootstrap else "live"
+            print(
+                f"  - [{flag}] {result.query!r} "
+                f"found={result.items_found} created={result.items_created} "
+                f"discord={result.items_posted_discord}"
+            )
+        return
+
+    if not args.query:
+        print("Indique --query \"marque\" ou utilise --all / --loop")
+        return
+
+    from vinted_bot.config_loader import load_searches_config
+    from vinted_bot.services.scrape_search import scrape_search_once
+
+    max_items = args.max_items or load_searches_config().max_items
     result = scrape_search_once(
         args.query,
-        max_items=args.max_items,
+        max_items=max_items,
         headless=headless,
     )
     log.info(
-        "scrape_done",
+        "scrape_cli_done",
         query=result.query,
         found=result.items_found,
-        upserted=result.items_upserted,
+        created=result.items_created,
         posted_discord=result.items_posted_discord,
+        bootstrap=result.bootstrap,
         run_id=result.scrape_run_id,
     )
+    mode = "bootstrap (pas de Discord)" if result.bootstrap else "live"
     print(
-        f"OK — query={result.query!r} "
-        f"found={result.items_found} upserted={result.items_upserted} "
+        f"OK — query={result.query!r} mode={mode} "
+        f"found={result.items_found} created={result.items_created} "
         f"discord={result.items_posted_discord} "
         f"run_id={result.scrape_run_id}"
     )
