@@ -1,0 +1,147 @@
+# Mots-clés / traits détectés dans titres (et description si présente)
+keywords:
+  - slug: vintage
+    display_name: Vintage
+    kind: style
+    aliases: ["vintage", "vintag"]
+  - slug: y2k
+    display_name: Y2K
+    kind: style
+    aliases: ["y2k", "y2 k", "années 2000", "annees 2000"]
+  - slug: gorpcore
+    display_name: Gorpcore
+    kind: style
+    aliases: ["gorpcore", "gorp core"]
+  - slug: made_in_usa
+    display_name: Made in USA
+    kind: origin
+    aliases: ["made in usa", "made in us", "usa made", "fabrique usa"]
+  - slug: big_logo
+    display_name: Big Logo
+    kind: style
+    aliases: ["big logo", "gros logo", "large logo"]
+  - slug: leather
+    display_name: Leather
+    kind: material
+    aliases: ["leather", "cuir", "daim", "suede"]
+  - slug: cargo
+    display_name: Cargo
+    kind: style
+    aliases: ["cargo"]
+  - slug: japan
+    display_name: Japan
+    kind: origin
+    aliases: ["japan", "japon", "made in japan", "japanese"]
+  - slug: archive
+    display_name: Archive
+    kind: rarity
+    aliases: ["archive", "archiv"]
+  - slug: rare
+    display_name: Rare
+    kind: rarity
+    aliases: ["rare", "rarissime", "hard to find"]
+  - slug: og
+    display_name: OG
+    kind: rarity
+    aliases: [" og ", "original", "og colorway"]
+  - slug: collab
+    display_name: Collab
+    kind: rarity
+    aliases: ["collab", "collaboration", "x "]
+  - slug: fleece
+    display_name: Fleece
+    kind: material
+    aliases: ["fleece", "polaire"]
+  - slug: wool
+    display_name: Wool
+    kind: material
+    aliases: ["wool", "laine", "merino"]
+  - slug: workwear
+    display_name: Workwear
+    kind: style
+    aliases: ["workwear", "work wear"]
+  - slug: techwear
+    display_name: Techwear
+    kind: style
+    aliases: ["techwear", "tech wear"]
+  - slug: gore_tex
+    display_name: Gore-Tex
+    kind: material
+    aliases: ["gore-tex", "gore tex", "goretex"]
+  - slug: deadstock
+    display_name: Deadstock
+    kind: rarity
+    aliases: ["deadstock", "dead stock", "nos", "new old stock"]
+  - slug: oversized
+    display_name: Oversized
+    kind: style
+    aliases: ["oversized", "oversize"]
+  - slug: cropped
+    display_name: Cropped
+    kind: style
+    aliases: ["cropped", "crop"]
+  - slug: quilted
+    display_name: Quilted
+    kind: style
+    aliases: ["quilted", "matelasse", "matelassé"]
+  - slug: compass
+    display_name: Compass
+    kind: style
+    aliases: ["compass", "boussole"]
+  # Licences / collections / produits (découverte hors marques fashion)
+  - slug: pokemon
+    display_name: Pokémon
+    kind: license
+    aliases: ["pokemon", "pokémon", "poke mon"]
+  - slug: lego
+    display_name: LEGO
+    kind: license
+    aliases: ["lego"]
+  - slug: harry_potter
+    display_name: Harry Potter
+    kind: license
+    aliases: ["harry potter", "hogwarts"]
+  - slug: disney
+    display_name: Disney
+    kind: license
+    aliases: ["disney", "disneyana"]
+  - slug: star_wars
+    display_name: Star Wars
+    kind: license
+    aliases: ["star wars", "starwars"]
+  - slug: sanrio
+    display_name: Sanrio
+    kind: license
+    aliases: ["sanrio", "hello kitty", "kuromi", "my melody"]
+  - slug: studio_ghibli
+    display_name: Studio Ghibli
+    kind: license
+    aliases: ["ghibli", "totoro", "studio ghibli"]
+  - slug: funko
+    display_name: Funko
+    kind: collection
+    aliases: ["funko", "funko pop", "pop vinyl"]
+  - slug: argentique
+    display_name: Argentique
+    kind: product
+    aliases: ["argentique", "film camera", "appareil argentique"]
+  - slug: polaroid
+    display_name: Polaroid
+    kind: product
+    aliases: ["polaroid", "instax"]
+  - slug: vinyl
+    display_name: Vinyle
+    kind: product
+    aliases: ["vinyle", "vinyl", "33 tours", "45 tours"]
+  - slug: us_exclusive
+    display_name: US Exclusive
+    kind: license
+    aliases: ["us exclusive", "usa exclusive", "made in usa"]
+  - slug: jp_exclusive
+    display_name: JP Exclusive
+    kind: license
+    aliases: ["jp exclusive", "japan exclusive", "made in japan"]
+  - slug: limited_edition
+    display_name: Limited Edition
+    kind: rarity
+    aliases: ["limited edition", "edition limitee", "édition limitée", "limited"]

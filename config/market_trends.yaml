@@ -1,0 +1,241 @@
+# Radar tendances — mouvements de marché (pas produits / pépites)
+defaults:
+  min_samples_short: 5
+  min_samples_long: 8
+  volume_surge_ratio: 1.7
+  volume_drop_ratio: 0.45
+  price_up_pct: 10.0
+  price_down_pct: 12.0
+  scarcity_active_max: 18
+  scarcity_new_7d_min: 5
+  new_entity_long_max: 10
+  new_entity_short_min: 5
+  min_token_len: 4
+  min_token_listings: 5
+  max_trends_posted: 8
+  lookback_days: 90
+  min_publish_score: 50
+  saturation_active_min: 45
+  # Trop vagues seuls (jamais une tendance Niveau 1)
+  exclude_topic_kinds: ["color"]
+  vague_alone_slugs:
+    - sac
+    - vintage_obj
+    - bijou
+    - livre
+    - jouet
+    - deco
+    - montre
+    - parfum
+    - figurine
+    - peluche
+    - console
+    - jeu_video
+    - manga_tome
+    - chaussure
+    - vetement
+
+# Axes de mouvement (Niveau 1) + objets (contexte pour combos)
+# standalone_ok: peut être une tendance seule si assez spécifique
+topics:
+  # --- Styles / mouvements ---
+  - slug: y2k
+    display_name: Style Y2K
+    kind: style
+    standalone_ok: true
+    aliases: ["y2k", "year 2000", "2000s", "annees 2000", "années 2000"]
+  - slug: gorpcore
+    display_name: Gorpcore / Outdoor tech
+    kind: style
+    standalone_ok: true
+    aliases: ["gorpcore", "gorp"]
+  - slug: outdoor
+    display_name: Outdoor
+    kind: style
+    standalone_ok: true
+    aliases: ["outdoor", "randonnee", "randonnée", "hiking", "trek"]
+  - slug: streetwear
+    display_name: Streetwear
+    kind: style
+    standalone_ok: true
+    aliases: ["streetwear", "street wear", "hype"]
+  - slug: archive
+    display_name: Streetwear archive
+    kind: style
+    standalone_ok: true
+    aliases: ["archive", "archival"]
+  - slug: luxe_vintage
+    display_name: Luxe vintage
+    kind: style
+    standalone_ok: true
+    aliases: ["luxe vintage", "luxury vintage", "designer vintage"]
+  - slug: workwear
+    display_name: Workwear
+    kind: style
+    standalone_ok: true
+    aliases: ["workwear", "work wear", "carhartt style"]
+  - slug: kawaii
+    display_name: Kawaii / cute collectibles
+    kind: style
+    standalone_ok: true
+    aliases: ["kawaii", "sanrio style"]
+  - slug: retro_gaming
+    display_name: Jeux vidéo rétro
+    kind: movement
+    standalone_ok: true
+    aliases: ["retro gaming", "rétrogaming", "retrogaming", "jeu retro", "console retro"]
+  - slug: argentique
+    display_name: Photo argentique
+    kind: movement
+    standalone_ok: true
+    aliases: ["argentique", "film camera", "appareil argentique"]
+  - slug: peluches_collection
+    display_name: Peluches de collection
+    kind: movement
+    standalone_ok: true
+    aliases: ["peluche collection", "peluches collection", "plush collectible", "jellycat"]
+  - slug: deadstock
+    display_name: Deadstock
+    kind: resale_keyword
+    standalone_ok: true
+    aliases: ["deadstock", "dead stock", "nos"]
+  - slug: selvedge
+    display_name: Denim selvedge
+    kind: resale_keyword
+    standalone_ok: true
+    aliases: ["selvedge", "selvage", "denim selvedge"]
+
+  # --- Époques ---
+  - slug: annees_70
+    display_name: Années 70
+    kind: era
+    standalone_ok: true
+    aliases: ["annees 70", "années 70", "1970", "70s", "seventies"]
+  - slug: annees_80
+    display_name: Années 80
+    kind: era
+    standalone_ok: true
+    aliases: ["annees 80", "années 80", "1980", "80s", "eighties"]
+  - slug: annees_90
+    display_name: Années 90
+    kind: era
+    standalone_ok: true
+    aliases: ["annees 90", "années 90", "1990", "90s", "nineties"]
+
+  # --- Vintage (jamais seul : trop vague) ---
+  - slug: vintage_obj
+    display_name: Vintage
+    kind: style
+    standalone_ok: false
+    aliases: ["vintage", "rétro", "retro", "ancien"]
+
+  # --- Objets (contexte, jamais tendance seuls) ---
+  - slug: sac
+    display_name: Sacs
+    kind: object
+    standalone_ok: false
+    aliases: ["sac", "handbag", "tote", "bandoulière", "bandouliere", "besace", "baguette"]
+  - slug: chaussure
+    display_name: Sneakers / chaussures
+    kind: object
+    standalone_ok: false
+    aliases: ["sneaker", "sneakers", "basket", "baskets", "chaussure", "chaussures"]
+  - slug: peluche
+    display_name: Peluches
+    kind: object
+    standalone_ok: false
+    aliases: ["peluche", "plush", "doudou", "nounours"]
+  - slug: figurine
+    display_name: Figurines
+    kind: object
+    standalone_ok: false
+    aliases: ["figurine", "figurine pop", "funko", "nendoroid", "amiibo"]
+  - slug: jouet
+    display_name: Jouets
+    kind: object
+    standalone_ok: false
+    aliases: ["jouet", "lego", "playmobil", "hot wheels"]
+  - slug: jeu_video
+    display_name: Jeux vidéo
+    kind: object
+    standalone_ok: false
+    aliases: ["jeu video", "jeu vidéo", "playstation", "xbox", "nintendo", "switch", "ps5", "ps4", "gameboy"]
+  - slug: console
+    display_name: Consoles
+    kind: object
+    standalone_ok: false
+    aliases: ["console", "nes", "snes", "gamecube", "wii", "psp", "steam deck"]
+  - slug: livre
+    display_name: Livres
+    kind: object
+    standalone_ok: false
+    aliases: ["livre", "roman", "novel"]
+  - slug: manga_tome
+    display_name: Mangas
+    kind: object
+    standalone_ok: false
+    aliases: ["tome", "manga", "shonen", "shojo"]
+  - slug: montre
+    display_name: Montres
+    kind: object
+    standalone_ok: false
+    aliases: ["montre", "watch", "chronographe"]
+  - slug: bijou
+    display_name: Bijoux
+    kind: object
+    standalone_ok: false
+    aliases: ["bijou", "bijoux", "collier", "bracelet", "bague"]
+  - slug: deco
+    display_name: Décoration
+    kind: object
+    standalone_ok: false
+    aliases: ["deco", "décoration", "decoration", "vase", "lampe", "cadre"]
+  - slug: appareil_photo
+    display_name: Appareils photo
+    kind: object
+    standalone_ok: false
+    aliases: ["appareil photo", "polaroid", "canon ae", "nikon f", "leica"]
+  - slug: vinyle
+    display_name: Vinyles
+    kind: object
+    standalone_ok: false
+    aliases: ["vinyle", "vinyl", "33 tours", "45 tours"]
+  - slug: lunettes
+    display_name: Lunettes
+    kind: object
+    standalone_ok: false
+    aliases: ["lunettes", "sunglasses", "oakley", "ray ban", "ray-ban"]
+
+  # --- Licences (contexte / combos) ---
+  - slug: pokemon
+    display_name: Pokémon
+    kind: licence
+    standalone_ok: true
+    aliases: ["pokemon", "pokémon", "pikachu", "dracaufeu", "mewtwo", "carte pokemon"]
+  - slug: sanrio
+    display_name: Sanrio
+    kind: licence
+    standalone_ok: true
+    aliases: ["sanrio", "hello kitty", "kuromi", "cinnamoroll", "my melody"]
+  - slug: disney
+    display_name: Disney
+    kind: licence
+    standalone_ok: false
+    aliases: ["disney", "mickey", "stitch", "lilo"]
+  - slug: anime
+    display_name: Anime / Manga
+    kind: licence
+    standalone_ok: true
+    aliases: ["anime", "one piece", "naruto", "dragon ball", "jujutsu", "demon slayer"]
+
+  # --- Tech / matières (mouvements produit) ---
+  - slug: gore_tex
+    display_name: Gore-Tex / techwear outdoor
+    kind: tech
+    standalone_ok: true
+    aliases: ["gore-tex", "gore tex", "goretex"]
+  - slug: cachemire
+    display_name: Cachemire
+    kind: material_premium
+    standalone_ok: true
+    aliases: ["cachemire", "cashmere"]

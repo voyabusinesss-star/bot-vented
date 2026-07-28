@@ -1,174 +1,313 @@
 # Recherches à scraper.
-# Pour ajouter une marque : entrée ici + DISCORD_CHANNEL_* dans .env
+# Pour ajouter une marque :
+#   1. entrée ici (brand + brand_ids Vinted)
+#   2. DISCORD_CHANNEL_* dans .env
+#   3. bloc brands: dans deal_filters.yaml
 #
 # priority: high | medium | low  (fréquence via section priorities)
-# optionnel: brand_ids, catalog_ids, every_n_cycles, extra_passes, max_items
+# brand_ids : IDs Vinted (filtre API précis, moins de bruit)
+# optionnel: catalog_ids, every_n_cycles, extra_passes, max_items
 # Par défaut catalog_ids = [4, 5] (vêtements F/H) → pas de chaussures.
 
 priorities:
-  # Flux continu : toutes les marques chaque cycle (plus de file d'attente → rafale)
+  # Flux continu : toutes les marques chaque cycle
   high:
     every_n_cycles: 1
     extra_passes: 0
-    max_items: 4
-    max_discord_posts: 2
+    max_items: 10
+    max_discord_posts: 8
   medium:
     every_n_cycles: 1
     extra_passes: 0
-    max_items: 3
-    max_discord_posts: 2
+    max_items: 8
+    max_discord_posts: 6
   low:
     every_n_cycles: 1
     extra_passes: 0
-    max_items: 2
-    max_discord_posts: 1
+    max_items: 5
+    max_discord_posts: 5
 
 searches:
   # --- Priorité élevée (forte concurrence) ---
   - brand: nike
     query: nike
+    brand_ids: [53]
+    # vêtements + chaussures (salon sneakers si DISCORD_CHANNEL_NIKE_SNEAKERS)
+    catalog_ids: [4, 5, 1231, 1242]
     priority: high
     enabled: true
   - brand: adidas
     query: adidas
+    brand_ids: [14]
+    catalog_ids: [4, 5, 1231, 1242]
     priority: high
     enabled: true
   - brand: the north face
     query: the north face
+    brand_ids: [2319]
     priority: high
     enabled: true
   - brand: carhartt
     query: carhartt
+    # Carhartt + Carhartt WIP
+    brand_ids: [362, 872289]
     priority: high
     enabled: true
   - brand: ralph lauren
     query: ralph lauren
+    # Ralph Lauren + Polo Ralph Lauren
+    brand_ids: [88, 4273]
     priority: high
     enabled: true
 
   # --- Priorité moyenne ---
   - brand: stone island
     query: stone island
+    brand_ids: [73306]
     priority: medium
     enabled: true
   - brand: stussy
     query: stussy
+    brand_ids: [441]
     priority: medium
     enabled: true
   - brand: lacoste
     query: lacoste
+    brand_ids: [304]
     priority: medium
     enabled: true
   - brand: tommy hilfiger
     query: tommy hilfiger
+    brand_ids: [94]
     priority: medium
     enabled: true
 
   # --- Priorité basse (moins de volume) ---
   - brand: dickies
     query: dickies
+    brand_ids: [65]
     priority: low
     enabled: true
   - brand: under armour
     query: under armour
+    brand_ids: [52035]
     priority: low
     enabled: true
   - brand: supreme
     query: supreme
+    brand_ids: [14969]
     priority: low
     enabled: true
   - brand: levis
     query: levis
+    brand_ids: [10]
     priority: low
     enabled: true
   - brand: ami paris
     query: ami paris
+    # Ami Paris + AMI
+    brand_ids: [7228770, 4615783]
     priority: low
     enabled: true
   - brand: the kooples
     query: the kooples
+    brand_ids: [2021]
     priority: low
     enabled: true
   - brand: columbia
     query: columbia
+    brand_ids: [17161]
     priority: low
     enabled: true
 
   # --- Luxe revente (forte valeur) ---
   - brand: moncler
     query: moncler
+    brand_ids: [6539]
+    # vêtements + chaussures F/H
+    catalog_ids: [4, 5, 1231, 1242]
     priority: high
     enabled: true
   - brand: louis vuitton
     query: louis vuitton
+    brand_ids: [417]
+    # vêtements + chaussures F/H
+    catalog_ids: [4, 5, 1231, 1242]
     priority: high
     enabled: true
   - brand: prada
     query: prada
+    brand_ids: [3573]
+    # vêtements + chaussures F/H
+    catalog_ids: [4, 5, 1231, 1242]
     priority: high
     enabled: true
   - brand: hermes
     query: hermes
+    brand_ids: [4785]
+    # vêtements + chaussures F/H
+    catalog_ids: [4, 5, 1231, 1242]
     priority: high
     enabled: true
   - brand: saint laurent
     query: saint laurent
+    # Saint Laurent + Yves Saint Laurent
+    brand_ids: [83122, 377]
+    # vêtements + chaussures F/H
+    catalog_ids: [4, 5, 1231, 1242]
     priority: high
     enabled: true
   - brand: celine
     query: celine
+    brand_ids: [1443]
+    # vêtements + chaussures F/H
+    catalog_ids: [4, 5, 1231, 1242]
     priority: medium
     enabled: true
   - brand: fendi
     query: fendi
+    brand_ids: [1189]
+    # vêtements + chaussures F/H
+    catalog_ids: [4, 5, 1231, 1242]
     priority: medium
     enabled: true
   - brand: burberry
     query: burberry
+    brand_ids: [364]
+    # vêtements + chaussures F/H
+    catalog_ids: [4, 5, 1231, 1242]
     priority: medium
     enabled: true
   - brand: givenchy
     query: givenchy
+    brand_ids: [2371]
+    # vêtements + chaussures F/H
+    catalog_ids: [4, 5, 1231, 1242]
     priority: medium
     enabled: true
   - brand: loewe
     query: loewe
+    brand_ids: [24209]
+    # vêtements + chaussures F/H
+    catalog_ids: [4, 5, 1231, 1242]
     priority: medium
     enabled: true
   - brand: jacquemus
     query: jacquemus
+    brand_ids: [168278]
+    # vêtements + chaussures F/H
+    catalog_ids: [4, 5, 1231, 1242]
     priority: medium
     enabled: true
   - brand: acne studios
     query: acne studios
+    brand_ids: [180798]
     priority: low
     enabled: true
   - brand: toteme
     query: toteme
+    brand_ids: [546105]
     priority: low
     enabled: true
   - brand: ganni
     query: ganni
+    brand_ids: [170650]
     priority: low
     enabled: true
   - brand: comme des garcons
     query: comme des garcons
+    brand_ids: [16352233]
+    priority: low
+    enabled: true
+
+  # --- Pépites Sneakers (chaussures F/H uniquement) ---
+  - brand: jordan
+    query: jordan
+    brand_ids: [2703]
+    catalog_ids: [1231, 1242]
+    priority: high
+    enabled: true
+  - brand: yeezy
+    query: yeezy
+    brand_ids: [115490]
+    catalog_ids: [1231, 1242]
+    priority: high
+    enabled: true
+  - brand: new balance
+    query: new balance
+    brand_ids: [1775]
+    catalog_ids: [1231, 1242]
+    priority: high
+    enabled: true
+  - brand: asics
+    query: asics
+    brand_ids: [1195]
+    catalog_ids: [1231, 1242]
+    priority: medium
+    enabled: true
+  - brand: salomon
+    query: salomon
+    brand_ids: [15457]
+    catalog_ids: [1231, 1242]
+    priority: medium
+    enabled: true
+  - brand: hoka
+    query: hoka
+    brand_ids: [5827029]
+    catalog_ids: [1231, 1242]
+    priority: medium
+    enabled: true
+  - brand: on cloud
+    query: on cloud
+    # On Running + On Cloud
+    brand_ids: [267947, 331974]
+    catalog_ids: [1231, 1242]
+    priority: medium
+    enabled: true
+  - brand: saucony
+    query: saucony
+    brand_ids: [40813]
+    catalog_ids: [1231, 1242]
+    priority: medium
+    enabled: true
+  - brand: dr martens
+    query: dr martens
+    brand_ids: [491465]
+    catalog_ids: [1231, 1242]
+    priority: medium
+    enabled: true
+  - brand: timberland
+    query: timberland
+    brand_ids: [44]
+    catalog_ids: [1231, 1242]
+    priority: medium
+    enabled: true
+  - brand: ugg
+    query: ugg
+    brand_ids: [2239]
+    catalog_ids: [1231, 1242]
+    priority: low
+    enabled: true
+  - brand: birkenstock
+    query: birkenstock
+    brand_ids: [3203]
+    catalog_ids: [1231, 1242]
     priority: low
     enabled: true
 
 defaults:
-  max_items: 4
-  # Pause courte entre marques (évite de “batcher” artificiellement)
-  delay_between_searches_seconds: 0.4
-  # Pause courte entre cycles — le scrape tourne quasi en continu
-  loop_interval_seconds: 15
-  browser_restart_every_cycles: 20
-  reconnect_delay_seconds: 20
+  max_items: 6
+  # Pause minimale entre marques (fluidité)
+  delay_between_searches_seconds: 0.15
+  # Cycle quasi continu — les nouvelles annonces sont captées vite
+  loop_interval_seconds: 5
+  browser_restart_every_cycles: 25
+  reconnect_delay_seconds: 15
   # Alerte si un cycle dure > factor * moyenne mobile
   slow_cycle_factor: 2.0
   order: newest_first
   # Vêtements uniquement (pas chaussures / sacs / accessoires)
   # 4 = Femmes > Vêtements, 5 = Hommes > Vêtements
   catalog_ids: [4, 5]
-  # Max posts Discord par marque et passage (reste marqué vu, pas de backlog)
-  max_discord_posts: 2
+  # Max posts Discord par marque et passage (filtre deal + âge avant)
+  max_discord_posts: 5

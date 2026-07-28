@@ -1,0 +1,115 @@
+# Détecteur de niches — sondes exploratoires autonomes
+# Objectif : trouver des niches INEXPLOITÉES / sous-évaluées
+# sur TOUTES les catégories Vinted (pas seulement vêtements / chaussures)
+#
+# Lance via : uv run vinted-bot detector --loop
+
+defaults:
+  # [] = probes sans filtre catalogue (recherche globale)
+  catalog_ids: []
+  max_items_per_probe: 24
+  max_items_per_catalog: 24
+  # Combien de catalogues balayer par cycle (rotation) — limité anti-ban
+  catalog_sweep_per_cycle: 3
+  loop_interval_seconds: 600
+  delay_between_probes_seconds: 4.5
+  min_samples: 5
+  min_margin_pct: 25
+  min_margin_eur: 12
+  niche_cooldown_hours: 12
+  max_discord_posts_per_cycle: 5
+
+# Balayage newest multi-domaines (rotation à chaque cycle)
+# id: all = flux site entier ; sinon ID catalogue Vinted FR
+discovery_catalogs:
+  - id: all
+    label: "Tout Vinted"
+  - id: 4
+    label: "Vêtements femmes"
+  - id: 5
+    label: "Vêtements hommes"
+  - id: 1231
+    label: "Chaussures femmes"
+  - id: 1242
+    label: "Chaussures hommes"
+  - id: 1193
+    label: "Enfants"
+  - id: 1918
+    label: "Maison"
+  - id: 2993
+    label: "Divertissement / électronique"
+
+# Probes découverte — produits / licences / objets / micro-niches
+# (volontairement hors ultra-marques saturées)
+probes:
+  # --- Mode sous-radar / vintage précis ---
+  - query: "diesel sac vintage"
+    label: "Sac Diesel vintage"
+  - query: "guess sac années 2000"
+    label: "Sac Guess Y2K"
+  - query: "carhartt detroit jacket"
+    label: "Carhartt Detroit"
+  - query: "dickies 874"
+    label: "Dickies 874"
+  - query: "lee storm rider"
+    label: "Lee Storm Rider"
+  - query: "wrangler cowboy cut"
+    label: "Wrangler Cowboy Cut"
+  - query: "patagonia synchilla"
+    label: "Patagonia Synchilla"
+  - query: "ll bean tote"
+    label: "L.L.Bean Tote"
+  - query: "barn jacket vintage"
+    label: "Barn jacket vintage"
+  - query: "maharishi pantalon"
+    label: "Maharishi"
+  - query: "cp company goggle"
+    label: "C.P. Company goggle"
+  - query: "napapijri geographic vintage"
+    label: "Napapijri Geographic"
+
+  # --- Objets / collections / jouets ---
+  - query: "jellycat bashful"
+    label: "Jellycat Bashful"
+  - query: "pokemon etb"
+    label: "Pokémon ETB"
+  - query: "lego star wars set"
+    label: "LEGO Star Wars"
+  - query: "funko pop chase"
+    label: "Funko Pop Chase"
+  - query: "tamagotchi vintage"
+    label: "Tamagotchi"
+  - query: "beanie baby rare"
+    label: "Beanie Baby"
+
+  # --- Électronique / photo / vinyle ---
+  - query: "polaroid sx-70"
+    label: "Polaroid SX-70"
+  - query: "canon ae-1"
+    label: "Canon AE-1"
+  - query: "nikon fm2"
+    label: "Nikon FM2"
+  - query: "gameboy color"
+    label: "Game Boy Color"
+  - query: "ipod classic"
+    label: "iPod Classic"
+  - query: "vinyle jazz original"
+    label: "Vinyle jazz"
+
+  # --- Déco / design ---
+  - query: "lampe memphis"
+    label: "Lampe Memphis"
+  - query: "vase mid century"
+    label: "Vase mid-century"
+  - query: "affiche cinema vintage"
+    label: "Affiche cinéma"
+
+  # --- Micro-niches textiles hors hype ---
+  - query: "chemise western pearl snap"
+    label: "Chemise western"
+  - query: "manteau loden"
+    label: "Manteau loden"
+  - query: "pull aran irlandais"
+    label: "Pull Aran"
+  - query: "sacoche military surplus"
+    label: "Sacoche military"

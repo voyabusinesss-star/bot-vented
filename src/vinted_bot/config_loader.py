@@ -36,6 +36,10 @@ class SearchTarget:
     extra_passes: int | None = None
     max_items: int | None = None
     max_discord_posts: int | None = None
+    price_from: float | None = None
+    price_to: float | None = None
+    # yaml = salons publics ; user_filter = alertes DM privées
+    source: str = "yaml"
 
 
 @dataclass(slots=True)
@@ -192,18 +196,59 @@ def load_searches_config(path: Path | None = None) -> SearchesConfig:
     )
 
 
+def brand_ids_lookup(path: Path | None = None) -> dict[str, list[int]]:
+    """Map marque normalisée → brand_ids Vinted (depuis searches.yaml)."""
+    cfg = load_searches_config(path)
+    out: dict[str, list[int]] = {}
+    for target in cfg.searches:
+        if not target.brand_ids:
+            continue
+        key = normalize_brand(target.brand)
+        if key and key not in out:
+            out[key] = list(target.brand_ids)
+    return out
+
+
+def target_dedupe_key(target: SearchTarget) -> tuple[Any, ...]:
+    return (
+        tuple(target.brand_ids),
+        (target.query or "").strip().lower(),
+        tuple(target.catalog_ids),
+        target.price_from,
+        target.price_to,
+    )
+
+
+def merge_search_targets(
+    primary: list[SearchTarget],
+    extra: list[SearchTarget],
+) -> list[SearchTarget]:
+    """Fusionne en préservant l'ordre ; déduplique les cibles identiques."""
+    seen: set[tuple[Any, ...]] = set()
+    out: list[SearchTarget] = []
+    for target in list(primary) + list(extra):
+        key = target_dedupe_key(target)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(target)
+    return out
+
+
 def active_searches_for_channels(
     channel_map: dict[str, str],
     *,
     path: Path | None = None,
+    sneaker_map: dict[str, str] | None = None,
 ) -> list[SearchTarget]:
-    """Recherches enabled dont la marque a un salon Discord configuré."""
+    """Recherches enabled dont la marque a un salon Discord (vêtements ou sneakers)."""
     cfg = load_searches_config(path)
+    tracked = set(channel_map) | set(sneaker_map or {})
     active: list[SearchTarget] = []
     for target in cfg.searches:
         if not target.enabled:
             continue
-        if target.brand not in channel_map:
+        if target.brand not in tracked:
             continue
         active.append(target)
     return active

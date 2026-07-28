@@ -1,0 +1,1410 @@
+# Filtrage intelligent revente — MARQUE × CATÉGORIE
+#
+# Pour ajouter une marque :
+#   1. Entrée sous `brands:` (clé = marque normalisée, underscores OK)
+#   2. Catégories sous `items:` avec max_buy / average_resell / minimum_profit / rarity
+#   3. (optionnel) salon Discord + searches.yaml comme avant
+#
+# Aucune modification de code nécessaire.
+#
+# rarity: low | medium | high | ultra
+# Une annonce est postée si score >= min_score_to_post ET
+#   (prix <= max_buy_price) OU (marge >= minimum_profit)
+
+settings:
+  enabled: true
+  # Score minimum pour poster (👀 SURVEILLANCE = 60)
+  min_score_to_post: 60
+  # Si true : marques absentes de ce fichier = jamais postées
+  require_brand_config: true
+  # Si true : préfère un match catégorie (sinon fallback médian)
+  require_category_match: true
+  # Titre ambigu → fallback prix médian marque (ne rate pas l'annonce)
+  use_category_fallback: true
+  # Ignore les annonces en ligne depuis plus de X minutes (null = pas de limite)
+  max_listing_age_minutes: 45
+  # Filtre enfant (titre + taille uniquement — pas de photos / description)
+  reject_kids: true
+  # Pas de chaussures sauf marques avec allow_shoes: true (luxe)
+  reject_shoes_unless_allowed: true
+  # Rejette replica / fake / 1:1
+  reject_replicas: true
+
+# Signaux ENFANT clairs uniquement.
+# XL / XXL / XXXL adultes ne sont JAMAIS exclus pour la taille seule.
+# Pas de "fille" / "garçon" : trop ambigus (coupe, style, destinataire).
+kids_filter:
+  title_keywords:
+    - enfant
+    - enfants
+    - kids
+    - kid
+    - junior
+    - bebe
+    - bébé
+    - baby
+    - layette
+  # Âge explicite dans titre ou taille (ex. "12 ans", "10-12 ans")
+  age_patterns:
+    - "\\b([1-9]|1[0-6])\\s*ans?\\b"
+    - "\\b([1-9]|1[0-6])\\s*-\\s*([1-9]|1[0-6])\\s*ans?\\b"
+    - "\\b(1[0-6]|[4-9])\\s*-\\s*(1[0-6]|[4-9])\\s*a\\b"
+  # Tailles kids — pas les lettres adultes (XL/XXL restent OK)
+  size_keywords:
+    - mois
+    - years
+    - yrs
+  size_patterns:
+    - "\\b(9[8-9]|1[0-5]\\d|16[0-4])\\s*cm\\b"   # ~98–164 cm
+    - "\\b(t|taille)?\\s*(2|4|6|8|10|12|14|16)\\s*ans?\\b"
+  # Tailles adultes explicites : taille seule = never reject
+  adult_size_allowlist:
+    - xxs
+    - xs
+    - s
+    - m
+    - l
+    - xl
+    - xxl
+    - xxxl
+    - 2xl
+    - 3xl
+    - 4xl
+    - unique
+    - tu
+    - one size
+
+# Chaussures — filtrées pour marques classiques ; gardées si allow_shoes: true
+# Marques shoes_only (Pépites Sneakers) : uniquement ces types
+shoes_filter:
+  title_keywords:
+    - chaussure
+    - chaussures
+    - basket
+    - baskets
+    - sneaker
+    - sneakers
+    - trainer
+    - trainers
+    - dunk
+    - dunks
+    - air force
+    - airforce
+    - af1
+    - air max
+    - airmax
+    - yeezy
+    - boost
+    - vapormax
+    - blazer
+    - cortez
+    - jordan 1
+    - jordan 3
+    - jordan 4
+    - jordan 5
+    - jordan 6
+    - jordan 11
+    - aj1
+    - aj4
+    - boots
+    - botte
+    - bottes
+    - bottine
+    - bottines
+    - mocassin
+    - mocassins
+    - derbie
+    - derbies
+    - derby
+    - richelieu
+    - sandale
+    - sandales
+    - tong
+    - tongs
+    - pantoufle
+    - slip on
+    - slip-on
+    - escarpin
+    - escarpins
+    - talon
+    - talons
+    - loafer
+    - loafers
+    - mule
+    - mules
+    - slide
+    - slides
+    - ballerine
+    - ballerines
+    - sneakerboot
+    - running
+    - trail
+    - gore tex
+    - gore-tex
+    - xt-6
+    - speedcross
+    - gellyte
+    - gel lyte
+    - gel kayano
+    - 550
+    - 9060
+    - 2002r
+    - 990
+    - 991
+    - 992
+    - 993
+    - cloudmonster
+    - cloudswift
+    - cloudsurfer
+    - cloudrunner
+  categories:
+    - dunk
+    - air_force_1
+    - chaussure
+  # Sur shoes_only : si le titre est clairement un vêtement → rejet
+  clothing_exclude_keywords:
+    - hoodie
+    - sweat
+    - crewneck
+    - tshirt
+    - t-shirt
+    - tee shirt
+    - polo
+    - chemise
+    - veste
+    - jacket
+    - blouson
+    - doudoune
+    - parka
+    - pantalon
+    - jogger
+    - jogging
+    - short
+    - bermuda
+    - casquette
+    - cap
+    - bonnet
+    - beanie
+    - sac
+    - bag
+    - bandouliere
+    - chaussette
+    - socks
+    - maillot
+    - jersey
+
+# Replicas / fakes (à exclure)
+replica_filter:
+  title_keywords:
+    - replica
+    - replic
+    - fake
+    - contrefacon
+    - contrefaçon
+    - "1:1"
+    - "1 1"
+    - mirroir
+    - mirror quality
+    - ua batch
+    - g5 batch
+    - not authentic
+    - non authentique
+
+# Lexique de détection (titre Vinted → catégorie)
+# L'ordre compte : première règle qui matche gagne (mettre le plus spécifique en premier).
+category_keywords:
+  dunk:
+    - dunk
+    - dunks
+  air_force_1:
+    - air force 1
+    - air force one
+    - af1
+    - "air force"
+  chaussure:
+    - chaussure
+    - chaussures
+    - basket
+    - baskets
+    - sneaker
+    - sneakers
+    - trainer
+    - trainers
+    - botte
+    - bottes
+    - bottine
+    - bottines
+    - mocassin
+    - derbie
+    - derby
+    - richelieu
+    - sandale
+    - sandales
+    - escarpin
+    - escarpins
+    - loafer
+    - mule
+    - mules
+    - ballerine
+    - ballerines
+    - air max
+    - running
+    - trail
+  polo:
+    - polo
+    - polos
+  hoodie:
+    - hoodie
+    - hoodies
+    - sweat a capuche
+    - sweat à capuche
+    - capuche
+  sweat:
+    - sweat
+    - sweats
+    - crewneck
+    - crew neck
+  pull:
+    - pull
+    - pulls
+    - sweater
+    - knit
+    - tricot
+    - cardigan
+    - gilet
+  # tshirt AVANT chemise (sinon "shirt" dans "t-shirt" matche chemise)
+  tshirt:
+    - t-shirt
+    - tshirt
+    - tee-shirt
+    - tee shirt
+    - tee
+  chemise:
+    - chemise
+    - chemises
+    - chemise homme
+    - chemise femme
+  veste:
+    - veste
+    - vestes
+    - jacket
+    - blouson
+    - doudoune
+    - parka
+    - bomber
+    - softshell
+    - trench
+    - blazer
+    - coupe vent
+    - coupe-vent
+    - windbreaker
+    - anorak
+  pantalon:
+    - pantalon
+    - pant
+    - pants
+    - jean
+    - jeans
+    - cargo
+    - jogger
+    - joggers
+    - jogging
+    - chino
+  short:
+    - short
+    - shorts
+    - bermuda
+
+# Scoring /100 (poids relatifs, normalisés ensuite)
+scoring:
+  weights:
+    margin: 30
+    brand: 15
+    rarity: 15
+    category: 10
+    below_market: 20
+    freshness: 10
+  rarity_points:
+    low: 40
+    medium: 60
+    high: 80
+    ultra: 100
+  # Fraîcheur : minutes depuis publication → points /10 (×10 dans le score)
+  freshness_minutes:
+    5: 10
+    15: 8
+    60: 5
+    360: 2
+  levels:
+    pepite: 90          # > 90 → 🔥 PÉPITE
+    bon_deal: 75        # 75–90 → 💎 BON DEAL
+    surveillance: 60    # 60–75 → 👀 SURVEILLANCE
+
+# Potentiel marque (0–100) — impacte le score "marque recherchée"
+brand_scores:
+  stone island: 95
+  supreme: 92
+  moncler: 95
+  louis vuitton: 98
+  hermes: 98
+  prada: 94
+  saint laurent: 93
+  nike: 88
+  ralph lauren: 85
+  the north face: 84
+  carhartt: 82
+  stussy: 86
+  adidas: 78
+  lacoste: 75
+  tommy hilfiger: 72
+  ami paris: 80
+  the kooples: 70
+  levis: 68
+  dickies: 65
+  columbia: 62
+  under armour: 55
+  celine: 90
+  fendi: 90
+  burberry: 85
+  givenchy: 88
+  loewe: 90
+  jacquemus: 82
+  acne studios: 78
+  comme des garcons: 88
+  toteme: 72
+  ganni: 70
+  jordan: 94
+  yeezy: 93
+  new balance: 86
+  asics: 82
+  salomon: 84
+  hoka: 80
+  on cloud: 83
+  saucony: 75
+  dr martens: 78
+  timberland: 76
+  ugg: 70
+  birkenstock: 72
+
+brands:
+  ralph_lauren:
+    display_name: Ralph Lauren
+    items:
+      polo:
+        max_buy_price: 25
+        average_resell: 50
+        minimum_profit: 20
+        rarity: medium
+      pull:
+        max_buy_price: 30
+        average_resell: 60
+        minimum_profit: 25
+        rarity: medium
+      chemise:
+        max_buy_price: 25
+        average_resell: 45
+        minimum_profit: 18
+        rarity: low
+      veste:
+        max_buy_price: 45
+        average_resell: 90
+        minimum_profit: 35
+        rarity: high
+      sweat:
+        max_buy_price: 30
+        average_resell: 55
+        minimum_profit: 20
+        rarity: medium
+      hoodie:
+        max_buy_price: 35
+        average_resell: 65
+        minimum_profit: 25
+        rarity: medium
+
+  nike:
+    display_name: Nike
+    allow_shoes: true
+    items:
+      hoodie:
+        max_buy_price: 30
+        average_resell: 55
+        minimum_profit: 20
+        rarity: medium
+      sweat:
+        max_buy_price: 25
+        average_resell: 45
+        minimum_profit: 18
+        rarity: low
+      veste:
+        max_buy_price: 40
+        average_resell: 75
+        minimum_profit: 30
+        rarity: medium
+      tshirt:
+        max_buy_price: 15
+        average_resell: 30
+        minimum_profit: 12
+        rarity: low
+      pantalon:
+        max_buy_price: 25
+        average_resell: 45
+        minimum_profit: 18
+        rarity: low
+      dunk:
+        max_buy_price: 80
+        average_resell: 140
+        minimum_profit: 45
+        rarity: high
+      air_force_1:
+        max_buy_price: 45
+        average_resell: 80
+        minimum_profit: 30
+        rarity: medium
+      chaussure:
+        max_buy_price: 50
+        average_resell: 90
+        minimum_profit: 30
+        rarity: medium
+
+  adidas:
+    display_name: Adidas
+    allow_shoes: true
+    items:
+      hoodie:
+        max_buy_price: 25
+        average_resell: 45
+        minimum_profit: 18
+        rarity: medium
+      sweat:
+        max_buy_price: 22
+        average_resell: 40
+        minimum_profit: 15
+        rarity: low
+      veste:
+        max_buy_price: 35
+        average_resell: 65
+        minimum_profit: 25
+        rarity: medium
+      tshirt:
+        max_buy_price: 12
+        average_resell: 25
+        minimum_profit: 10
+        rarity: low
+      pantalon:
+        max_buy_price: 25
+        average_resell: 45
+        minimum_profit: 18
+        rarity: low
+      chaussure:
+        max_buy_price: 45
+        average_resell: 85
+        minimum_profit: 30
+        rarity: medium
+
+  carhartt:
+    display_name: Carhartt
+    items:
+      veste:
+        max_buy_price: 50
+        average_resell: 100
+        minimum_profit: 40
+        rarity: high
+      hoodie:
+        max_buy_price: 35
+        average_resell: 65
+        minimum_profit: 25
+        rarity: medium
+      sweat:
+        max_buy_price: 30
+        average_resell: 55
+        minimum_profit: 20
+        rarity: medium
+      pantalon:
+        max_buy_price: 35
+        average_resell: 60
+        minimum_profit: 22
+        rarity: medium
+      tshirt:
+        max_buy_price: 15
+        average_resell: 30
+        minimum_profit: 12
+        rarity: low
+
+  stone_island:
+    display_name: Stone Island
+    items:
+      sweat:
+        max_buy_price: 60
+        average_resell: 150
+        minimum_profit: 70
+        rarity: high
+      veste:
+        max_buy_price: 100
+        average_resell: 220
+        minimum_profit: 90
+        rarity: ultra
+      pull:
+        max_buy_price: 55
+        average_resell: 130
+        minimum_profit: 60
+        rarity: high
+      tshirt:
+        max_buy_price: 35
+        average_resell: 80
+        minimum_profit: 35
+        rarity: medium
+      hoodie:
+        max_buy_price: 70
+        average_resell: 160
+        minimum_profit: 75
+        rarity: high
+
+  lacoste:
+    display_name: Lacoste
+    items:
+      polo:
+        max_buy_price: 20
+        average_resell: 40
+        minimum_profit: 15
+        rarity: medium
+      sweat:
+        max_buy_price: 25
+        average_resell: 45
+        minimum_profit: 18
+        rarity: low
+      veste:
+        max_buy_price: 35
+        average_resell: 65
+        minimum_profit: 25
+        rarity: medium
+      pull:
+        max_buy_price: 25
+        average_resell: 50
+        minimum_profit: 20
+        rarity: medium
+
+  tommy_hilfiger:
+    display_name: Tommy Hilfiger
+    items:
+      polo:
+        max_buy_price: 18
+        average_resell: 35
+        minimum_profit: 14
+        rarity: low
+      sweat:
+        max_buy_price: 22
+        average_resell: 40
+        minimum_profit: 15
+        rarity: low
+      veste:
+        max_buy_price: 30
+        average_resell: 55
+        minimum_profit: 20
+        rarity: medium
+      chemise:
+        max_buy_price: 18
+        average_resell: 35
+        minimum_profit: 14
+        rarity: low
+
+  the_north_face:
+    display_name: The North Face
+    items:
+      veste:
+        max_buy_price: 55
+        average_resell: 110
+        minimum_profit: 45
+        rarity: high
+      hoodie:
+        max_buy_price: 35
+        average_resell: 65
+        minimum_profit: 25
+        rarity: medium
+      sweat:
+        max_buy_price: 30
+        average_resell: 55
+        minimum_profit: 20
+        rarity: medium
+      pantalon:
+        max_buy_price: 30
+        average_resell: 55
+        minimum_profit: 20
+        rarity: medium
+
+  stussy:
+    display_name: Stussy
+    items:
+      hoodie:
+        max_buy_price: 45
+        average_resell: 90
+        minimum_profit: 35
+        rarity: high
+      sweat:
+        max_buy_price: 40
+        average_resell: 80
+        minimum_profit: 30
+        rarity: high
+      tshirt:
+        max_buy_price: 25
+        average_resell: 50
+        minimum_profit: 20
+        rarity: medium
+      veste:
+        max_buy_price: 55
+        average_resell: 110
+        minimum_profit: 45
+        rarity: high
+
+  dickies:
+    display_name: Dickies
+    items:
+      pantalon:
+        max_buy_price: 25
+        average_resell: 45
+        minimum_profit: 18
+        rarity: medium
+      veste:
+        max_buy_price: 30
+        average_resell: 55
+        minimum_profit: 20
+        rarity: medium
+      chemise:
+        max_buy_price: 18
+        average_resell: 35
+        minimum_profit: 14
+        rarity: low
+
+  supreme:
+    display_name: Supreme
+    items:
+      hoodie:
+        max_buy_price: 80
+        average_resell: 180
+        minimum_profit: 80
+        rarity: ultra
+      tshirt:
+        max_buy_price: 40
+        average_resell: 90
+        minimum_profit: 40
+        rarity: high
+      sweat:
+        max_buy_price: 70
+        average_resell: 150
+        minimum_profit: 65
+        rarity: ultra
+      veste:
+        max_buy_price: 100
+        average_resell: 220
+        minimum_profit: 90
+        rarity: ultra
+
+  levis:
+    display_name: Levi's
+    items:
+      pantalon:
+        max_buy_price: 25
+        average_resell: 45
+        minimum_profit: 18
+        rarity: medium
+      veste:
+        max_buy_price: 35
+        average_resell: 65
+        minimum_profit: 25
+        rarity: medium
+      chemise:
+        max_buy_price: 18
+        average_resell: 35
+        minimum_profit: 14
+        rarity: low
+      short:
+        max_buy_price: 15
+        average_resell: 28
+        minimum_profit: 10
+        rarity: low
+
+  ami_paris:
+    display_name: Ami Paris
+    items:
+      sweat:
+        max_buy_price: 50
+        average_resell: 100
+        minimum_profit: 40
+        rarity: high
+      pull:
+        max_buy_price: 45
+        average_resell: 90
+        minimum_profit: 35
+        rarity: high
+      tshirt:
+        max_buy_price: 30
+        average_resell: 60
+        minimum_profit: 25
+        rarity: medium
+      veste:
+        max_buy_price: 70
+        average_resell: 140
+        minimum_profit: 55
+        rarity: high
+
+  the_kooples:
+    display_name: The Kooples
+    items:
+      veste:
+        max_buy_price: 40
+        average_resell: 75
+        minimum_profit: 30
+        rarity: medium
+      chemise:
+        max_buy_price: 22
+        average_resell: 40
+        minimum_profit: 15
+        rarity: low
+      pull:
+        max_buy_price: 25
+        average_resell: 45
+        minimum_profit: 18
+        rarity: low
+      pantalon:
+        max_buy_price: 25
+        average_resell: 45
+        minimum_profit: 18
+        rarity: low
+
+  columbia:
+    display_name: Columbia
+    items:
+      veste:
+        max_buy_price: 35
+        average_resell: 65
+        minimum_profit: 25
+        rarity: medium
+      sweat:
+        max_buy_price: 20
+        average_resell: 40
+        minimum_profit: 15
+        rarity: low
+      pantalon:
+        max_buy_price: 22
+        average_resell: 40
+        minimum_profit: 15
+        rarity: low
+
+  # --- Luxe (fort potentiel) — chaussures autorisées ---
+  moncler:
+    display_name: Moncler
+    allow_shoes: true
+    items:
+      veste:
+        max_buy_price: 250
+        average_resell: 550
+        minimum_profit: 200
+        rarity: ultra
+      pull:
+        max_buy_price: 120
+        average_resell: 250
+        minimum_profit: 100
+        rarity: high
+      tshirt:
+        max_buy_price: 60
+        average_resell: 120
+        minimum_profit: 50
+        rarity: medium
+      chaussure:
+        max_buy_price: 150
+        average_resell: 320
+        minimum_profit: 120
+        rarity: high
+
+  louis_vuitton:
+    display_name: Louis Vuitton
+    allow_shoes: true
+    items:
+      veste:
+        max_buy_price: 300
+        average_resell: 700
+        minimum_profit: 280
+        rarity: ultra
+      sweat:
+        max_buy_price: 200
+        average_resell: 450
+        minimum_profit: 180
+        rarity: ultra
+      tshirt:
+        max_buy_price: 100
+        average_resell: 220
+        minimum_profit: 90
+        rarity: high
+      chaussure:
+        max_buy_price: 250
+        average_resell: 550
+        minimum_profit: 220
+        rarity: ultra
+
+  prada:
+    display_name: Prada
+    allow_shoes: true
+    items:
+      veste:
+        max_buy_price: 200
+        average_resell: 450
+        minimum_profit: 180
+        rarity: ultra
+      pull:
+        max_buy_price: 100
+        average_resell: 220
+        minimum_profit: 90
+        rarity: high
+      tshirt:
+        max_buy_price: 60
+        average_resell: 130
+        minimum_profit: 55
+        rarity: high
+      chaussure:
+        max_buy_price: 180
+        average_resell: 400
+        minimum_profit: 160
+        rarity: ultra
+
+  hermes:
+    display_name: Hermès
+    allow_shoes: true
+    items:
+      veste:
+        max_buy_price: 400
+        average_resell: 900
+        minimum_profit: 350
+        rarity: ultra
+      pull:
+        max_buy_price: 200
+        average_resell: 450
+        minimum_profit: 180
+        rarity: ultra
+      chemise:
+        max_buy_price: 150
+        average_resell: 320
+        minimum_profit: 130
+        rarity: high
+      chaussure:
+        max_buy_price: 300
+        average_resell: 650
+        minimum_profit: 250
+        rarity: ultra
+
+  saint_laurent:
+    display_name: Saint Laurent
+    allow_shoes: true
+    items:
+      veste:
+        max_buy_price: 180
+        average_resell: 400
+        minimum_profit: 160
+        rarity: ultra
+      chemise:
+        max_buy_price: 70
+        average_resell: 150
+        minimum_profit: 60
+        rarity: high
+      tshirt:
+        max_buy_price: 50
+        average_resell: 110
+        minimum_profit: 45
+        rarity: medium
+      chaussure:
+        max_buy_price: 150
+        average_resell: 350
+        minimum_profit: 140
+        rarity: ultra
+
+  # --- Marques scrapées qui manquaient de config prix ---
+  under_armour:
+    display_name: Under Armour
+    items:
+      hoodie:
+        max_buy_price: 18
+        average_resell: 35
+        minimum_profit: 14
+        rarity: low
+      sweat:
+        max_buy_price: 15
+        average_resell: 30
+        minimum_profit: 12
+        rarity: low
+      veste:
+        max_buy_price: 25
+        average_resell: 45
+        minimum_profit: 18
+        rarity: medium
+      pantalon:
+        max_buy_price: 18
+        average_resell: 32
+        minimum_profit: 12
+        rarity: low
+      tshirt:
+        max_buy_price: 10
+        average_resell: 20
+        minimum_profit: 8
+        rarity: low
+
+  celine:
+    display_name: Celine
+    allow_shoes: true
+    items:
+      veste:
+        max_buy_price: 200
+        average_resell: 450
+        minimum_profit: 180
+        rarity: ultra
+      pull:
+        max_buy_price: 100
+        average_resell: 220
+        minimum_profit: 90
+        rarity: high
+      chemise:
+        max_buy_price: 80
+        average_resell: 170
+        minimum_profit: 70
+        rarity: high
+      tshirt:
+        max_buy_price: 50
+        average_resell: 110
+        minimum_profit: 45
+        rarity: medium
+      pantalon:
+        max_buy_price: 90
+        average_resell: 190
+        minimum_profit: 75
+        rarity: high
+      chaussure:
+        max_buy_price: 160
+        average_resell: 360
+        minimum_profit: 140
+        rarity: ultra
+
+  fendi:
+    display_name: Fendi
+    allow_shoes: true
+    items:
+      veste:
+        max_buy_price: 180
+        average_resell: 400
+        minimum_profit: 160
+        rarity: ultra
+      sweat:
+        max_buy_price: 90
+        average_resell: 200
+        minimum_profit: 80
+        rarity: high
+      tshirt:
+        max_buy_price: 55
+        average_resell: 120
+        minimum_profit: 50
+        rarity: medium
+      pull:
+        max_buy_price: 100
+        average_resell: 220
+        minimum_profit: 90
+        rarity: high
+      chaussure:
+        max_buy_price: 150
+        average_resell: 340
+        minimum_profit: 130
+        rarity: ultra
+
+  burberry:
+    display_name: Burberry
+    allow_shoes: true
+    items:
+      veste:
+        max_buy_price: 120
+        average_resell: 280
+        minimum_profit: 110
+        rarity: high
+      chemise:
+        max_buy_price: 45
+        average_resell: 95
+        minimum_profit: 40
+        rarity: medium
+      polo:
+        max_buy_price: 35
+        average_resell: 70
+        minimum_profit: 28
+        rarity: medium
+      sweat:
+        max_buy_price: 50
+        average_resell: 110
+        minimum_profit: 45
+        rarity: medium
+      tshirt:
+        max_buy_price: 30
+        average_resell: 65
+        minimum_profit: 25
+        rarity: low
+      chaussure:
+        max_buy_price: 80
+        average_resell: 180
+        minimum_profit: 70
+        rarity: high
+
+  givenchy:
+    display_name: Givenchy
+    allow_shoes: true
+    items:
+      veste:
+        max_buy_price: 160
+        average_resell: 360
+        minimum_profit: 140
+        rarity: ultra
+      hoodie:
+        max_buy_price: 90
+        average_resell: 200
+        minimum_profit: 80
+        rarity: high
+      sweat:
+        max_buy_price: 80
+        average_resell: 180
+        minimum_profit: 70
+        rarity: high
+      tshirt:
+        max_buy_price: 45
+        average_resell: 100
+        minimum_profit: 40
+        rarity: medium
+      chaussure:
+        max_buy_price: 140
+        average_resell: 320
+        minimum_profit: 120
+        rarity: ultra
+
+  loewe:
+    display_name: Loewe
+    allow_shoes: true
+    items:
+      veste:
+        max_buy_price: 220
+        average_resell: 480
+        minimum_profit: 190
+        rarity: ultra
+      pull:
+        max_buy_price: 120
+        average_resell: 260
+        minimum_profit: 100
+        rarity: high
+      chemise:
+        max_buy_price: 90
+        average_resell: 200
+        minimum_profit: 80
+        rarity: high
+      tshirt:
+        max_buy_price: 55
+        average_resell: 120
+        minimum_profit: 50
+        rarity: medium
+      pantalon:
+        max_buy_price: 100
+        average_resell: 220
+        minimum_profit: 90
+        rarity: high
+      chaussure:
+        max_buy_price: 180
+        average_resell: 400
+        minimum_profit: 150
+        rarity: ultra
+
+  jacquemus:
+    display_name: Jacquemus
+    allow_shoes: true
+    items:
+      veste:
+        max_buy_price: 100
+        average_resell: 220
+        minimum_profit: 90
+        rarity: high
+      chemise:
+        max_buy_price: 50
+        average_resell: 110
+        minimum_profit: 45
+        rarity: medium
+      pull:
+        max_buy_price: 55
+        average_resell: 120
+        minimum_profit: 50
+        rarity: medium
+      tshirt:
+        max_buy_price: 35
+        average_resell: 75
+        minimum_profit: 30
+        rarity: low
+      pantalon:
+        max_buy_price: 55
+        average_resell: 120
+        minimum_profit: 50
+        rarity: medium
+      chaussure:
+        max_buy_price: 90
+        average_resell: 200
+        minimum_profit: 80
+        rarity: high
+
+  acne_studios:
+    display_name: Acne Studios
+    items:
+      veste:
+        max_buy_price: 90
+        average_resell: 200
+        minimum_profit: 80
+        rarity: high
+      pull:
+        max_buy_price: 55
+        average_resell: 120
+        minimum_profit: 50
+        rarity: medium
+      sweat:
+        max_buy_price: 50
+        average_resell: 110
+        minimum_profit: 45
+        rarity: medium
+      tshirt:
+        max_buy_price: 30
+        average_resell: 65
+        minimum_profit: 25
+        rarity: low
+      pantalon:
+        max_buy_price: 50
+        average_resell: 110
+        minimum_profit: 45
+        rarity: medium
+      chemise:
+        max_buy_price: 40
+        average_resell: 85
+        minimum_profit: 35
+        rarity: medium
+
+  toteme:
+    display_name: Toteme
+    items:
+      veste:
+        max_buy_price: 80
+        average_resell: 170
+        minimum_profit: 70
+        rarity: high
+      pull:
+        max_buy_price: 50
+        average_resell: 110
+        minimum_profit: 45
+        rarity: medium
+      chemise:
+        max_buy_price: 40
+        average_resell: 90
+        minimum_profit: 35
+        rarity: medium
+      pantalon:
+        max_buy_price: 45
+        average_resell: 100
+        minimum_profit: 40
+        rarity: medium
+      tshirt:
+        max_buy_price: 25
+        average_resell: 55
+        minimum_profit: 22
+        rarity: low
+
+  ganni:
+    display_name: Ganni
+    items:
+      veste:
+        max_buy_price: 55
+        average_resell: 120
+        minimum_profit: 50
+        rarity: medium
+      pull:
+        max_buy_price: 35
+        average_resell: 75
+        minimum_profit: 30
+        rarity: medium
+      chemise:
+        max_buy_price: 30
+        average_resell: 65
+        minimum_profit: 25
+        rarity: low
+      tshirt:
+        max_buy_price: 20
+        average_resell: 45
+        minimum_profit: 18
+        rarity: low
+      pantalon:
+        max_buy_price: 30
+        average_resell: 65
+        minimum_profit: 25
+        rarity: low
+
+  comme_des_garcons:
+    display_name: Comme des Garçons
+    items:
+      veste:
+        max_buy_price: 100
+        average_resell: 230
+        minimum_profit: 95
+        rarity: high
+      hoodie:
+        max_buy_price: 70
+        average_resell: 160
+        minimum_profit: 70
+        rarity: high
+      sweat:
+        max_buy_price: 60
+        average_resell: 140
+        minimum_profit: 60
+        rarity: high
+      tshirt:
+        max_buy_price: 35
+        average_resell: 80
+        minimum_profit: 35
+        rarity: medium
+      chemise:
+        max_buy_price: 45
+        average_resell: 100
+        minimum_profit: 40
+        rarity: medium
+      pull:
+        max_buy_price: 55
+        average_resell: 120
+        minimum_profit: 50
+        rarity: medium
+
+  # --- Pépites Sneakers ---
+  jordan:
+    display_name: Jordan
+    allow_shoes: true
+    shoes_only: true
+    items:
+      dunk:
+        max_buy_price: 90
+        average_resell: 160
+        minimum_profit: 50
+        rarity: high
+      chaussure:
+        max_buy_price: 85
+        average_resell: 150
+        minimum_profit: 50
+        rarity: high
+
+  yeezy:
+    display_name: Yeezy
+    allow_shoes: true
+    shoes_only: true
+    items:
+      chaussure:
+        max_buy_price: 100
+        average_resell: 180
+        minimum_profit: 60
+        rarity: ultra
+
+  new_balance:
+    display_name: New Balance
+    allow_shoes: true
+    shoes_only: true
+    items:
+      chaussure:
+        max_buy_price: 55
+        average_resell: 100
+        minimum_profit: 35
+        rarity: medium
+
+  asics:
+    display_name: Asics
+    allow_shoes: true
+    shoes_only: true
+    items:
+      chaussure:
+        max_buy_price: 50
+        average_resell: 95
+        minimum_profit: 35
+        rarity: medium
+
+  salomon:
+    display_name: Salomon
+    allow_shoes: true
+    shoes_only: true
+    items:
+      chaussure:
+        max_buy_price: 60
+        average_resell: 110
+        minimum_profit: 40
+        rarity: high
+
+  hoka:
+    display_name: Hoka
+    allow_shoes: true
+    shoes_only: true
+    items:
+      chaussure:
+        max_buy_price: 55
+        average_resell: 100
+        minimum_profit: 35
+        rarity: medium
+
+  on_cloud:
+    display_name: On Cloud
+    allow_shoes: true
+    shoes_only: true
+    items:
+      chaussure:
+        max_buy_price: 70
+        average_resell: 130
+        minimum_profit: 45
+        rarity: high
+
+  saucony:
+    display_name: Saucony
+    allow_shoes: true
+    shoes_only: true
+    items:
+      chaussure:
+        max_buy_price: 45
+        average_resell: 85
+        minimum_profit: 30
+        rarity: medium
+
+  dr_martens:
+    display_name: Dr. Martens
+    allow_shoes: true
+    shoes_only: true
+    items:
+      chaussure:
+        max_buy_price: 50
+        average_resell: 95
+        minimum_profit: 35
+        rarity: medium
+
+  timberland:
+    display_name: Timberland
+    allow_shoes: true
+    shoes_only: true
+    items:
+      chaussure:
+        max_buy_price: 55
+        average_resell: 100
+        minimum_profit: 35
+        rarity: medium
+
+  ugg:
+    display_name: UGG
+    allow_shoes: true
+    shoes_only: true
+    items:
+      chaussure:
+        max_buy_price: 45
+        average_resell: 85
+        minimum_profit: 30
+        rarity: medium
+
+  birkenstock:
+    display_name: Birkenstock
+    allow_shoes: true
+    shoes_only: true
+    items:
+      chaussure:
+        max_buy_price: 35
+        average_resell: 70
+        minimum_profit: 25
+        rarity: medium

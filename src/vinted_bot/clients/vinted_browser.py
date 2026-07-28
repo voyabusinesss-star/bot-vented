@@ -24,18 +24,26 @@ def build_catalog_params(
     order: str = "newest_first",
     brand_ids: Sequence[int] | None = None,
     catalog_ids: Sequence[int] | None = None,
+    price_from: float | None = None,
+    price_to: float | None = None,
 ) -> list[tuple[str, str]]:
     """Paramètres catalog Vinted (tri newest + filtres optionnels)."""
     params: list[tuple[str, str]] = [
-        ("search_text", query),
         ("page", str(page)),
         ("per_page", str(per_page)),
         ("order", order or "newest_first"),
     ]
+    # search_text optionnel si brand_ids seuls (toutes les nouveautés de la marque)
+    if query and query.strip():
+        params.insert(0, ("search_text", query.strip()))
     for brand_id in brand_ids or []:
         params.append(("brand_ids[]", str(brand_id)))
     for catalog_id in catalog_ids or []:
         params.append(("catalog[]", str(catalog_id)))
+    if price_from is not None:
+        params.append(("price_from", str(int(price_from) if float(price_from).is_integer() else price_from)))
+    if price_to is not None:
+        params.append(("price_to", str(int(price_to) if float(price_to).is_integer() else price_to)))
     return params
 
 
@@ -45,7 +53,7 @@ class VintedBrowser:
         *,
         base_url: str = DEFAULT_BASE_URL,
         headless: bool = True,
-        delay_seconds: float = 3.0,
+        delay_seconds: float = 1.0,
         timeout_ms: int = 45_000,
     ) -> None:
         self.base_url = base_url.rstrip("/")
@@ -138,6 +146,8 @@ class VintedBrowser:
         order: str = "newest_first",
         brand_ids: Sequence[int] | None = None,
         catalog_ids: Sequence[int] | None = None,
+        price_from: float | None = None,
+        price_to: float | None = None,
     ) -> dict[str, Any]:
         """
         Récupère /api/v2/catalog/items.
@@ -151,6 +161,8 @@ class VintedBrowser:
             order=order,
             brand_ids=brand_ids,
             catalog_ids=catalog_ids,
+            price_from=price_from,
+            price_to=price_to,
         )
         log.info(
             "catalog_search",
@@ -159,6 +171,8 @@ class VintedBrowser:
             order=order,
             brand_ids=list(brand_ids or []),
             catalog_ids=list(catalog_ids or []),
+            price_from=price_from,
+            price_to=price_to,
         )
 
         payload = self._fetch_catalog_via_page(params)
@@ -221,11 +235,22 @@ class VintedBrowser:
         if not isinstance(result, dict):
             return None
         if result.get("__error"):
+            status = int(result.get("__error") or 0)
+            body = str(result.get("__body", ""))[:300]
             log.warning(
                 "catalog_fetch_failed",
-                status=result.get("__error"),
-                body=str(result.get("__body", ""))[:300],
+                status=status,
+                body=body,
             )
+            # Anti-ban : backoff long sur rate-limit / soft block
+            if status in {429, 403} or "rate_limit" in body.lower():
+                penalty = 45.0 if status == 429 else 90.0
+                self.rate_limiter.penalize(penalty)
+                log.warning(
+                    "catalog_rate_limit_backoff",
+                    status=status,
+                    penalty_seconds=penalty,
+                )
             return None
         if "items" not in result and "catalog_items" not in result:
             return None
@@ -237,7 +262,7 @@ def vinted_browser(
     *,
     base_url: str = DEFAULT_BASE_URL,
     headless: bool = True,
-    delay_seconds: float = 3.0,
+    delay_seconds: float = 1.0,
 ) -> Generator[VintedBrowser, None, None]:
     client = VintedBrowser(
         base_url=base_url,

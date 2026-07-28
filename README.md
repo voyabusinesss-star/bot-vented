@@ -61,6 +61,26 @@ uv run pytest
 Les recherches se configurent dans [`config/searches.yaml`](config/searches.yaml) (query + marque + filtres optionnels), les IDs Discord restent dans `.env`.
 Mode 24/7 : `scrape --loop` (intervalle / restart navigateur dans le YAML).
 
+## Filtrage deal (revente)
+
+Config unique : [`config/deal_filters.yaml`](config/deal_filters.yaml).
+
+Une annonce n’est postée Discord que si :
+1. la marque est configurée,
+2. le titre matche une catégorie (polo, sweat, dunk…),
+3. `(prix ≤ max_buy_price)` **OU** `(marge ≥ minimum_profit)`,
+4. le score opportunité ≥ `min_score_to_post` (défaut 60),
+5. l’annonce a moins de `max_listing_age_minutes` (défaut **30 min**).
+
+Niveaux : 🔥 PÉPITE (>90) · 💎 BON DEAL (75–90) · 👀 SURVEILLANCE (60–75).
+
+Le filtre deal est purement en mémoire (config YAML cachée) : **il ne ralentit pas** le scrape.
+Le bot tourne en `newest_first` en boucle courte (~5s) sur toutes les marques avec salon Discord.
+
+Pour ajouter une marque : une entrée sous `brands:` dans `deal_filters.yaml` (pas de code).  
+Pour désactiver le filtre prix : `settings.enabled: false`.  
+Pour changer la fenêtre de fraîcheur : `max_listing_age_minutes: 15` (ou `null` = illimité).
+
 ## Structure
 
 ```text
@@ -69,11 +89,14 @@ src/vinted_bot/
   config.py        # variables d'environnement
   clients/         # Playwright / HTTP
   parsers/         # HTML/JSON → données
-  services/        # orchestration métier
+  services/        # scrape + deal_filter (score opportunité)
   notify/          # Discord embeds
   db/              # modèles, session, repositories
   jobs/            # planification
   utils/           # logs, retry, rate limit
+config/
+  searches.yaml    # marques à scraper
+  deal_filters.yaml # prix max / resell / score
 tests/
 alembic/           # migrations
 docker-compose.yml # Postgres local

@@ -11,6 +11,7 @@ from vinted_bot.config_loader import (
     load_searches_config,
     select_targets_for_cycle,
 )
+from vinted_bot.services.filter_scrape_targets import active_filter_search_targets
 from vinted_bot.services.scrape_search import scrape_all_configured
 from vinted_bot.utils.logging import get_logger
 
@@ -24,12 +25,9 @@ def run_scrape_loop(
     interval_seconds: float | None = None,
 ) -> None:
     """
-    Tourne indéfiniment avec cycles intelligents :
-    - sélection des recherches selon priorité (high/medium/low)
-    - pause configurable entre cycles
-    - recyclage navigateur périodique
-    - reprise auto après erreur
-    - métriques + détection de ralentissement
+    Tourne indéfiniment :
+    - pulse fréquent des **filtres privés** (alertes DM continues)
+    - marques YAML intercalées **1 par 1** (ne bloque jamais la veille filtres)
     """
     settings = get_settings()
     cfg = load_searches_config()
@@ -38,13 +36,19 @@ def run_scrape_loop(
         if interval_seconds is not None
         else cfg.loop_interval_seconds
     )
+    filter_interval = float(
+        getattr(settings, "private_filter_scrape_interval_seconds", 20.0) or 20.0
+    )
     restart_every = max(1, cfg.browser_restart_every_cycles)
     reconnect_delay = max(5.0, cfg.reconnect_delay_seconds)
-    slow_factor = max(1.1, cfg.slow_cycle_factor)
+    # Combien de marques YAML entre deux pulses filtres
+    yaml_batch_size = 1
 
     log.info(
         "loop_start",
         interval_seconds=interval,
+        private_filter_scrape_interval_seconds=filter_interval,
+        yaml_batch_size=yaml_batch_size,
         browser_restart_every_cycles=restart_every,
         max_items=max_items or cfg.max_items,
         priorities={
@@ -61,36 +65,15 @@ def run_scrape_loop(
     browser: VintedBrowser | None = None
     cycles_on_browser = 0
     cycle = 0
-    cycle_durations: list[float] = []
+    yaml_cycle = 0
+    yaml_queue: list = []
+    yaml_queue_pos = 0
+    last_filter_pulse = 0.0
 
     try:
         while True:
             cycle += 1
             cycle_started = time.monotonic()
-            channel_map = settings.brand_channel_map()
-            all_targets = active_searches_for_channels(channel_map)
-            due_targets = select_targets_for_cycle(
-                cycle, all_targets, cfg.priorities
-            )
-
-            by_priority: dict[str, int] = {}
-            for t in due_targets:
-                by_priority[t.priority] = by_priority.get(t.priority, 0) + 1
-
-            log.info(
-                "loop_cycle_start",
-                cycle=cycle,
-                due=len(due_targets),
-                total_configured=len(all_targets),
-                by_priority=by_priority,
-                brands=[t.brand for t in due_targets],
-            )
-
-            if not due_targets:
-                log.info("loop_cycle_skip_empty", cycle=cycle)
-                time.sleep(interval)
-                continue
-
             try:
                 if browser is None:
                     browser = VintedBrowser(
@@ -102,44 +85,86 @@ def run_scrape_loop(
                     browser.warm_up()
                     cycles_on_browser = 0
 
-                results = scrape_all_configured(
-                    max_items=max_items,
-                    headless=headless,
-                    browser=browser,
-                    targets=due_targets,
-                    cycle=cycle,
-                )
-                cycles_on_browser += 1
-                elapsed = round(time.monotonic() - cycle_started, 2)
-                cycle_durations.append(elapsed)
-                # moyenne mobile sur les 10 derniers cycles
-                window = cycle_durations[-10:]
-                avg = sum(window) / len(window)
-                avg_search = (
-                    round(elapsed / max(1, len(results)), 2) if results else 0.0
-                )
+                filter_targets = active_filter_search_targets()
+                ran_filters = False
+                now = time.monotonic()
 
-                log.info(
-                    "loop_cycle_done",
-                    cycle=cycle,
-                    elapsed_seconds=elapsed,
-                    avg_search_seconds=avg_search,
-                    avg_cycle_seconds=round(avg, 2),
-                    searches=len(results),
-                    created=sum(r.items_created for r in results),
-                    posted=sum(r.items_posted_discord for r in results),
-                    found=sum(r.items_found for r in results),
-                    cycles_on_browser=cycles_on_browser,
-                )
-
-                if len(window) >= 3 and elapsed > avg * slow_factor:
-                    log.warning(
-                        "loop_slowdown_detected",
+                # 1) Toujours prioriser les filtres privés dès que l'intervalle est écoulé
+                if filter_targets and (now - last_filter_pulse) >= filter_interval:
+                    log.info(
+                        "loop_private_filter_pulse",
                         cycle=cycle,
-                        elapsed_seconds=elapsed,
-                        avg_cycle_seconds=round(avg, 2),
-                        factor=slow_factor,
+                        targets=len(filter_targets),
+                        queries=[t.query for t in filter_targets],
                     )
+                    scrape_all_configured(
+                        max_items=max_items,
+                        headless=headless,
+                        browser=browser,
+                        targets=filter_targets,
+                        cycle=cycle,
+                        include_user_filters=False,
+                    )
+                    last_filter_pulse = time.monotonic()
+                    ran_filters = True
+                    cycles_on_browser += 1
+
+                # 2) Une (petite) tranche YAML — jamais le catalogue entier d'un coup
+                channel_map = settings.brand_channel_map()
+                sneaker_map = settings.sneaker_channel_map()
+                all_targets = active_searches_for_channels(
+                    channel_map, sneaker_map=sneaker_map
+                )
+                if not yaml_queue or yaml_queue_pos >= len(yaml_queue):
+                    yaml_cycle += 1
+                    yaml_queue = select_targets_for_cycle(
+                        yaml_cycle, all_targets, cfg.priorities
+                    )
+                    yaml_queue_pos = 0
+                    log.info(
+                        "loop_yaml_queue_refill",
+                        yaml_cycle=yaml_cycle,
+                        due=len(yaml_queue),
+                        brands=[t.brand for t in yaml_queue[:12]],
+                    )
+
+                batch = yaml_queue[yaml_queue_pos : yaml_queue_pos + yaml_batch_size]
+                yaml_queue_pos += len(batch)
+                if batch:
+                    log.info(
+                        "loop_yaml_batch",
+                        cycle=cycle,
+                        brands=[t.brand for t in batch],
+                        remaining=max(0, len(yaml_queue) - yaml_queue_pos),
+                    )
+                    results = scrape_all_configured(
+                        max_items=max_items,
+                        headless=headless,
+                        browser=browser,
+                        targets=batch,
+                        cycle=cycle,
+                        include_user_filters=False,
+                    )
+                    cycles_on_browser += 1
+                    log.info(
+                        "loop_cycle_done",
+                        cycle=cycle,
+                        elapsed_seconds=round(time.monotonic() - cycle_started, 2),
+                        searches=len(results),
+                        created=sum(r.items_created for r in results),
+                        posted=sum(r.items_posted_discord for r in results),
+                        found=sum(r.items_found for r in results),
+                        private_filter_pulse=ran_filters,
+                        cycles_on_browser=cycles_on_browser,
+                    )
+                elif ran_filters:
+                    log.info(
+                        "loop_filter_only_done",
+                        cycle=cycle,
+                        elapsed_seconds=round(time.monotonic() - cycle_started, 2),
+                    )
+                else:
+                    log.info("loop_idle", cycle=cycle)
 
                 if cycles_on_browser >= restart_every:
                     log.info("loop_browser_recycle", cycle=cycle)
@@ -160,8 +185,15 @@ def run_scrape_loop(
                 time.sleep(reconnect_delay)
                 continue
 
-            log.info("loop_sleep", seconds=interval, next_cycle=cycle + 1)
-            time.sleep(interval)
+            # Attente courte avant le prochain tour (filtres ~20s)
+            if filter_targets:
+                remaining = max(
+                    2.0, filter_interval - (time.monotonic() - last_filter_pulse)
+                )
+            else:
+                remaining = max(5.0, interval)
+            log.info("loop_sleep", seconds=round(remaining, 1), next_cycle=cycle + 1)
+            time.sleep(remaining)
     finally:
         if browser is not None:
             try:

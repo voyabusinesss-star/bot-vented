@@ -1,0 +1,185 @@
+# Catégories market-intel (hors mode pure) — ordre = priorité de match
+categories:
+  - slug: sac
+    domain: accessories
+    aliases:
+      - sac
+      - sacs
+      - bag
+      - bags
+      - handbag
+      - tote
+      - bandouliere
+      - bandoulière
+      - crossbody
+      - pochette
+      - backpack
+      - sac a dos
+      - sac à dos
+  - slug: peluche
+    domain: toys
+    aliases:
+      - peluche
+      - peluches
+      - plush
+      - soft toy
+      - doudou
+  - slug: jouet
+    domain: toys
+    aliases:
+      - jouet
+      - jouets
+      - figurine
+      - figurines
+      - lego
+      - playmobil
+      - toy
+      - toys
+  - slug: decoration
+    domain: home
+    aliases:
+      - decoration
+      - décoration
+      - deco
+      - décor
+      - vase
+      - cadre
+      - poster
+      - affiche
+      - luminaire
+      - bougie
+  - slug: electronique
+    domain: electronics
+    aliases:
+      - electronique
+      - électronique
+      - smartphone
+      - iphone
+      - airpods
+      - casque
+      - ecouteurs
+      - écouteurs
+      - console
+      - nintendo
+      - playstation
+      - xbox
+      - switch
+  - slug: appareil_photo
+    domain: electronics
+    aliases:
+      - appareil photo
+      - argentique
+      - polaroid
+      - instax
+      - reflex
+      - mirrorless
+      - film photo
+      - appareil photo argentique
+  - slug: collection
+    domain: collectibles
+    aliases:
+      - collection
+      - collector
+      - carte pokemon
+      - cartes pokemon
+      - trading card
+      - tcg
+      - funko
+      - pop vinyl
+  - slug: livre
+    domain: media
+    aliases:
+      - livre
+      - livres
+      - manga
+      - bd
+      - comic
+      - comics
+  - slug: objet
+    domain: objects
+    aliases:
+      - objet
+      - curiosite
+      - curiosité
+      - vintage object
+      - brocante
+  - slug: bijoux
+    domain: accessories
+    aliases:
+      - bijou
+      - bijoux
+      - collier
+      - bracelet
+      - bague
+      - boucles d'oreilles
+      - jewelry
+  - slug: montre
+    domain: accessories
+    aliases:
+      - montre
+      - montres
+      - watch
+      - chronographe
+  - slug: sport
+    domain: sport
+    aliases:
+      - sport
+      - fitness
+      - yoga
+      - vélo
+      - velo
+      - skate
+      - snowboard
+      - raquette
+  - slug: bebe
+    domain: kids
+    aliases:
+      - bebe
+      - bébé
+      - poussette
+      - landau
+      - puericulture
+      - puériculture
+  - slug: beaute
+    domain: beauty
+    aliases:
+      - beaute
+      - beauté
+      - maquillage
+      - parfum
+      - soin
+      - skincare
+  - slug: musique
+    domain: media
+    aliases:
+      - guitare
+      - piano
+      - ukulele
+      - ukulélé
+      - instrument
+      - partition
+      - vinyle
+      - cd audio
+  - slug: jeux_video
+    domain: electronics
+    aliases:
+      - jeux video
+      - jeu video
+      - jeux vidéo
+      - game
+      - manette
+      - joycon
+      - ps5
+      - xbox series
+  - slug: maison
+    domain: home
+    aliases:
+      - maison
+      - mobilier
+      - meuble
+      - canape
+      - canapé
+      - chaise
+      - table basse
+      - cuisine
+      - vaisselle

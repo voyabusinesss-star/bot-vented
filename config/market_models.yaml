@@ -1,0 +1,264 @@
+# Modèles reconnus dans titres / descriptions (aliases → slug)
+# brand: slug marque normalisé (normalize_brand) ; null = toutes marques
+models:
+  # Nike sneakers
+  - slug: shox_tl
+    display_name: Shox TL
+    brand: nike
+    aliases: ["shox tl", "shox-tl", "nike shox tl"]
+  - slug: tn
+    display_name: Tuned / TN
+    brand: nike
+    aliases: ["tuned", "air max plus", "airmax plus", "nike tn", " tn"]
+  - slug: air_max_95
+    display_name: Air Max 95
+    brand: nike
+    aliases: ["air max 95", "airmax 95", "am95"]
+  - slug: air_max_90
+    display_name: Air Max 90
+    brand: nike
+    aliases: ["air max 90", "airmax 90", "am90"]
+  - slug: air_max_97
+    display_name: Air Max 97
+    brand: nike
+    aliases: ["air max 97", "airmax 97", "am97"]
+  - slug: dunk_sb
+    display_name: Dunk SB
+    brand: nike
+    aliases: ["dunk sb", "sb dunk", "dunk low sb", "dunk high sb"]
+  - slug: dunk
+    display_name: Dunk
+    brand: nike
+    aliases: ["dunk low", "dunk high", "nike dunk"]
+  - slug: air_force_1
+    display_name: Air Force 1
+    brand: nike
+    aliases: ["air force 1", "airforce 1", "af1", "aforce"]
+  - slug: jordan_1
+    display_name: Jordan 1
+    brand: jordan
+    aliases: ["jordan 1", "aj1", "air jordan 1", "jordan one"]
+  - slug: jordan_4
+    display_name: Jordan 4
+    brand: jordan
+    aliases: ["jordan 4", "aj4", "air jordan 4"]
+
+  # Adidas
+  - slug: samba_og
+    display_name: Samba OG
+    brand: adidas
+    aliases: ["samba og", "samba"]
+  - slug: gazelle
+    display_name: Gazelle
+    brand: adidas
+    aliases: ["gazelle"]
+  - slug: campus
+    display_name: Campus
+    brand: adidas
+    aliases: ["campus 00", "campus"]
+  - slug: spezial
+    display_name: Spezial
+    brand: adidas
+    aliases: ["spezial", "handball spezial"]
+  - slug: yeezy_350
+    display_name: Yeezy 350
+    brand: yeezy
+    aliases: ["yeezy 350", "350 v2", "boost 350"]
+
+  # Salomon
+  - slug: xt_6
+    display_name: XT-6
+    brand: salomon
+    aliases: ["xt-6", "xt 6", "xt6"]
+  - slug: xt_4
+    display_name: XT-4
+    brand: salomon
+    aliases: ["xt-4", "xt 4", "xt4"]
+  - slug: acs_pro
+    display_name: ACS Pro
+    brand: salomon
+    aliases: ["acs pro", "acs-pro"]
+
+  # New Balance / Asics
+  - slug: nb_550
+    display_name: 550
+    brand: new balance
+    aliases: ["550", "nb 550"]
+  - slug: nb_9060
+    display_name: 9060
+    brand: new balance
+    aliases: ["9060", "nb 9060"]
+  - slug: gel_kayano
+    display_name: Gel Kayano
+    brand: asics
+    aliases: ["gel kayano", "kayano", "gel-kayano"]
+  - slug: gel_1130
+    display_name: Gel 1130
+    brand: asics
+    aliases: ["gel 1130", "1130"]
+
+  # Carhartt clothing
+  - slug: detroit_jacket
+    display_name: Detroit Jacket
+    brand: carhartt
+    aliases: ["detroit jacket", "detroit", "veste detroit"]
+  - slug: active_jacket
+    display_name: Active Jacket
+    brand: carhartt
+    aliases: ["active jacket", "active", "veste active"]
+  - slug: double_knee
+    display_name: Double Knee
+    brand: carhartt
+    aliases: ["double knee", "doubleknee", "b01"]
+  - slug: carhartt_cargo
+    display_name: Cargo
+    brand: carhartt
+    aliases: ["cargo carhartt", "carhartt cargo", "pantalon cargo carhartt"]
+  - slug: michigan_coat
+    display_name: Michigan Coat
+    brand: carhartt
+    aliases: ["michigan coat", "michigan", "chore coat"]
+  - slug: santa_fe
+    display_name: Santa Fe
+    brand: carhartt
+    aliases: ["santa fe", "santafe"]
+
+  # Levi's
+  - slug: levis_501
+    display_name: 501
+    brand: levis
+    aliases: ["501", "levis 501", "levi's 501"]
+  - slug: levis_505
+    display_name: 505
+    brand: levis
+    aliases: ["505", "levis 505"]
+  - slug: levis_550
+    display_name: 550
+    brand: levis
+    aliases: ["550", "levis 550"]
+
+  # Stone Island / TNF / Stussy
+  - slug: soft_shell_r
+    display_name: Soft Shell-R
+    brand: stone island
+    aliases: ["soft shell-r", "soft shell r", "softshell-r"]
+  - slug: ghost_piece
+    display_name: Ghost Piece
+    brand: stone island
+    aliases: ["ghost piece", "ghostpiece"]
+  - slug: overshirt
+    display_name: Overshirt
+    brand: stone island
+    aliases: ["overshirt", "over shirt"]
+  - slug: nuptse
+    display_name: Nuptse
+    brand: the north face
+    aliases: ["nuptse"]
+  - slug: 1996_nuptse
+    display_name: 1996 Nuptse
+    brand: the north face
+    aliases: ["1996 nuptse", "nuptse 1996"]
+  - slug: denali
+    display_name: Denali
+    brand: the north face
+    aliases: ["denali"]
+  - slug: himalayan
+    display_name: Himalayan
+    brand: the north face
+    aliases: ["himalayan"]
+  - slug: basic_stussy
+    display_name: Basic Stussy
+    brand: stussy
+    aliases: ["basic stussy", "stussy basic", "8 ball"]
+
+  # Ralph Lauren / Tommy / Lacoste / Dickies
+  - slug: polo_ralph
+    display_name: Polo
+    brand: ralph lauren
+    aliases: ["polo ralph", "polo rl", "ralph lauren polo"]
+  - slug: rugby_shirt
+    display_name: Rugby
+    brand: ralph lauren
+    aliases: ["rugby ralph", "ralph rugby", "rugby shirt"]
+  - slug: chaps
+    display_name: Chaps
+    brand: ralph lauren
+    aliases: ["chaps ralph", "ralph chaps"]
+  - slug: tommy_flag
+    display_name: Flag
+    brand: tommy hilfiger
+    aliases: ["tommy flag", "drapeau tommy", "big flag"]
+  - slug: lacoste_polo
+    display_name: Polo Lacoste
+    brand: lacoste
+    aliases: ["polo lacoste", "lacoste polo"]
+  - slug: dickies_874
+    display_name: 874
+    brand: dickies
+    aliases: ["874", "dickies 874"]
+
+  # Objets / licences (niches hors mode)
+  - slug: bashful_bunny
+    display_name: Bashful Bunny
+    brand: jellycat
+    aliases: ["bashful bunny", "bashful", "jellycat bunny"]
+  - slug: jellycat_dragon
+    display_name: Jellycat Dragon
+    brand: jellycat
+    aliases: ["jellycat dragon", "bashful dragon"]
+  - slug: baguette_bag
+    display_name: Sac baguette
+    brand: null
+    aliases: ["sac baguette", "baguette bag", "baguette vintage"]
+  - slug: diesel_archive_bag
+    display_name: Sac Diesel archive
+    brand: diesel
+    aliases: ["diesel archive", "sac diesel", "diesel bag"]
+  - slug: longchamp_pliage
+    display_name: Le Pliage
+    brand: longchamp
+    aliases: ["le pliage", "pliage longchamp", "longchamp pliage"]
+  - slug: birkin
+    display_name: Birkin
+    brand: hermes
+    aliases: ["birkin"]
+  - slug: kelly_bag
+    display_name: Kelly
+    brand: hermes
+    aliases: ["kelly hermes", "sac kelly"]
+  - slug: pokemon_etb
+    display_name: ETB Pokémon
+    brand: null
+    aliases: ["etb pokemon", "elite trainer box", "etb pokémon"]
+  - slug: pokemon_booster
+    display_name: Booster Pokémon
+    brand: null
+    aliases: ["booster pokemon", "booster pokémon", "display pokemon"]
+  - slug: lego_modular
+    display_name: LEGO Modular
+    brand: null
+    aliases: ["lego modular", "modular building"]
+  - slug: lego_star_wars
+    display_name: LEGO Star Wars
+    brand: null
+    aliases: ["lego star wars", "lego starwars"]
+  - slug: funko_pop
+    display_name: Funko Pop
+    brand: null
+    aliases: ["funko pop", "funko"]
+  - slug: gameboy
+    display_name: Game Boy
+    brand: nintendo
+    aliases: ["game boy", "gameboy", "gameboy advance", "gba"]
+  - slug: nintendo_switch
+    display_name: Nintendo Switch
+    brand: nintendo
+    aliases: ["nintendo switch", "switch oled", "switch lite"]
+  - slug: canon_ae1
+    display_name: Canon AE-1
+    brand: canon
+    aliases: ["canon ae-1", "canon ae1", "ae-1"]
+  - slug: olympus_mju
+    display_name: Olympus mju
+    brand: olympus
+    aliases: ["olympus mju", "olympus µ", "mju ii", "stylus epic"]

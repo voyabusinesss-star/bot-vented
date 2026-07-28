@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urljoin
 
@@ -19,8 +20,31 @@ class SearchItem:
     currency: str = "EUR"
     brand: str | None = None
     size: str | None = None
+    published_at: datetime | None = None
     photo_urls: list[str] = field(default_factory=list)
     raw_json: dict[str, Any] = field(default_factory=dict)
+
+
+def extract_published_at(item: dict[str, Any]) -> datetime | None:
+    """Extrait la date de publication depuis le JSON catalog Vinted."""
+    created: Any = item.get("created_at_ts") or item.get("created_at")
+    photo = item.get("photo")
+    if created is None and isinstance(photo, dict):
+        hr = photo.get("high_resolution")
+        if isinstance(hr, dict):
+            created = hr.get("timestamp")
+        elif isinstance(hr, list) and hr:
+            first = hr[0]
+            if isinstance(first, dict):
+                created = first.get("timestamp")
+    if isinstance(created, (int, float)):
+        return datetime.fromtimestamp(float(created), tz=timezone.utc)
+    if isinstance(created, str):
+        try:
+            return datetime.fromisoformat(created.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
 
 
 def _to_cents(value: Any) -> int | None:
@@ -120,6 +144,7 @@ def parse_catalog_item(item: dict[str, Any], *, base_url: str = BASE_URL) -> Sea
         currency=currency,
         brand=brand,
         size=size,
+        published_at=extract_published_at(item),
         photo_urls=_photo_urls(item),
         raw_json=item,
     )

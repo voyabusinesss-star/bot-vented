@@ -33,5 +33,6 @@ htmlcov/
 
 # App data
 data/
+.data/
 *.log
 downloads/
