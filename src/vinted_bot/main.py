@@ -83,6 +83,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Poste le panneau Mes alertes dans DISCORD_CHANNEL_MES_ALERTES",
     )
     sub.add_parser(
+        "post-reglement",
+        help="Poste le panneau règlement dans DISCORD_CHANNEL_REGLEMENT",
+    )
+    sub.add_parser(
         "post-detector-apercu",
         help="Poste l'aperçu détecteur dans DISCORD_CHANNEL_NICHES_DEMO",
     )
@@ -94,6 +98,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--catalog-path",
         default=None,
         help="Chemin vers Resello_1000_Niches_Vinted.xlsx (défaut: config/)",
+    )
+    vintify_parser = sub.add_parser(
+        "post-vintify-intro",
+        help="Poste l'intro Vintify dans DISCORD_CHANNEL_VINTIFY (embed + aperçu + lien)",
+    )
+    vintify_parser.add_argument(
+        "--preview-path",
+        default=None,
+        help="Chemin vers l'image d'aperçu Vintify (défaut: config/vintify-preview.png)",
     )
 
     niche = sub.add_parser(
@@ -478,6 +491,33 @@ def cmd_post_mes_alertes(log) -> None:
         print(f"OK — panneau Mes alertes posté dans le salon {channel_id}")
 
 
+def cmd_post_reglement(log) -> None:
+    from vinted_bot.interactions.discord_api import DiscordInteractionClient
+    from vinted_bot.interactions.reglement_panel import build_reglement_panel_payload
+
+    settings = get_settings()
+    if not settings.discord_bot_token.strip():
+        print("DISCORD_BOT_TOKEN manquant dans .env")
+        return
+
+    with DiscordInteractionClient(settings) as client:
+        channel_id = client.reglement_channel_id()
+        if not channel_id:
+            print(
+                "DISCORD_CHANNEL_REGLEMENT manquant dans .env "
+                "(ID du salon règlement)."
+            )
+            return
+        payload = build_reglement_panel_payload()
+        message = client.post_channel_payload(channel_id, payload)
+        log.info(
+            "reglement_panel_posted",
+            channel_id=channel_id,
+            message_id=message.get("id"),
+        )
+        print(f"OK — panneau règlement posté dans le salon {channel_id}")
+
+
 def cmd_post_detector_apercu(log) -> None:
     from vinted_bot.interactions.detector_preview_panel import (
         build_detector_preview_panel_payload,
@@ -622,6 +662,52 @@ def cmd_post_niches_vinted_intro(args, log) -> None:
             f"OK — intro niches vinted postée dans le salon {channel_id} "
             f"(téléchargement intégré via bouton)"
         )
+
+
+def cmd_post_vintify_intro(args, log) -> None:
+    from vinted_bot.interactions.discord_api import (
+        DiscordInteractionClient,
+        sanitize_guild_id,
+    )
+    from vinted_bot.interactions.vintify_intro_panel import post_vintify_intro_message
+
+    settings = get_settings()
+    if not settings.discord_bot_token.strip():
+        print("DISCORD_BOT_TOKEN manquant dans .env")
+        return
+
+    with DiscordInteractionClient(settings) as client:
+        channel_id = client.vintify_channel_id()
+        if not channel_id:
+            print(
+                "DISCORD_CHANNEL_VINTIFY manquant dans .env "
+                "(ID du salon Vintify)."
+            )
+            return
+        webhook_url = getattr(settings, "discord_webhook_vintify", "") or ""
+        if not webhook_url.strip():
+            print(
+                "DISCORD_WEBHOOK_VINTIFY manquant — crée un webhook dans le salon "
+                "Vintify et copie l'URL dans .env."
+            )
+            return
+        guild_id = sanitize_guild_id(getattr(settings, "discord_guild_id", "") or "")
+        if not guild_id:
+            print("DISCORD_GUILD_ID manquant dans .env")
+            return
+        message = post_vintify_intro_message(
+            client,
+            channel_id=channel_id,
+            guild_id=guild_id,
+            webhook_url=webhook_url,
+            preview_path=getattr(args, "preview_path", None),
+        )
+        log.info(
+            "vintify_intro_cli_posted",
+            channel_id=channel_id,
+            message_id=message.get("id"),
+        )
+        print(f"OK — intro Vintify postée dans le salon {channel_id}")
 
 
 def cmd_discord_interactions(log) -> None:
@@ -861,11 +947,17 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "post-mes-alertes":
         cmd_post_mes_alertes(log)
         return
+    if args.command == "post-reglement":
+        cmd_post_reglement(log)
+        return
     if args.command == "post-detector-apercu":
         cmd_post_detector_apercu(log)
         return
     if args.command == "post-niches-vinted-intro":
         cmd_post_niches_vinted_intro(args, log)
+        return
+    if args.command == "post-vintify-intro":
+        cmd_post_vintify_intro(args, log)
         return
     if args.command == "niche-detect":
         cmd_niche_detect(args, log)

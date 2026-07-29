@@ -151,37 +151,44 @@ def _save_catalog_host_meta(*, channel_id: str, message_id: str, url: str) -> No
 
 
 def _resolve_catalog_host_channel(intro_channel_id: str) -> str:
-    """Salon technique pour héberger le xlsx (jamais le salon public intro)."""
+    """Salon technique pour héberger le xlsx (jamais le détecteur ni l'intro public)."""
     settings = get_settings()
     intro = sanitize_discord_channel_id(intro_channel_id)
+    niches_detector = sanitize_discord_channel_id(
+        getattr(settings, "discord_channel_niches", "") or ""
+    )
     for raw in (
+        getattr(settings, "discord_channel_catalog_host", ""),
         getattr(settings, "discord_channel_logs", ""),
-        getattr(settings, "discord_channel_niches", ""),
+        getattr(settings, "discord_channel_mes_alertes", ""),
     ):
         host = sanitize_discord_channel_id(str(raw or ""))
-        if host and host != intro:
-            return host
+        if not host or host == intro or host == niches_detector:
+            continue
+        return host
     raise ValueError(
-        "Configure DISCORD_CHANNEL_LOGS ou DISCORD_CHANNEL_NICHES "
-        "(salon admin) pour héberger le catalogue — pas le salon niches vinted."
+        "Configure DISCORD_CHANNEL_CATALOG_HOST (salon admin privé) "
+        "pour héberger le catalogue — pas le salon 🧠 Détecteur."
     )
 
 
-def _purge_intro_channel_catalog_attachments(
+def _purge_channel_catalog_attachments(
     client: Any,
-    intro_channel_id: str,
+    channel_id: str,
 ) -> None:
-    """Retire les anciens fichiers xlsx visibles dans le salon public."""
-    intro = sanitize_discord_channel_id(intro_channel_id)
+    """Retire les fichiers xlsx catalogue visibles dans un salon."""
+    channel = sanitize_discord_channel_id(channel_id)
+    if not channel:
+        return
     meta = _catalog_host_meta()
-    if meta.get("channel_id") == intro and meta.get("message_id"):
+    if meta.get("channel_id") == channel and meta.get("message_id"):
         try:
-            client.delete_channel_message(intro, meta["message_id"])
+            client.delete_channel_message(channel, meta["message_id"])
         except Exception:  # noqa: BLE001
             pass
     try:
         response = client._client.get(
-            f"/channels/{intro}/messages",
+            f"/channels/{channel}/messages",
             params={"limit": 25},
         )
         if response.status_code != 200:
@@ -196,11 +203,18 @@ def _purge_intro_channel_catalog_attachments(
             if name != CATALOG_FILENAME:
                 continue
             try:
-                client.delete_channel_message(intro, str(msg["id"]))
+                client.delete_channel_message(channel, str(msg["id"]))
             except Exception:  # noqa: BLE001
                 pass
     except Exception as exc:  # noqa: BLE001
-        log.debug("catalog_intro_purge_failed", error=str(exc)[:120])
+        log.debug("catalog_channel_purge_failed", error=str(exc)[:120])
+
+
+def _purge_intro_channel_catalog_attachments(
+    client: Any,
+    intro_channel_id: str,
+) -> None:
+    _purge_channel_catalog_attachments(client, intro_channel_id)
 
 
 def ensure_catalog_download_url(
@@ -213,6 +227,13 @@ def ensure_catalog_download_url(
     """Héberge le xlsx hors salon public et retourne l'URL CDN."""
     host_channel = sanitize_discord_channel_id(host_channel_id)
     meta = _catalog_host_meta()
+    old_host = meta.get("channel_id") or ""
+    old_msg = meta.get("message_id") or ""
+    if old_host and old_msg and old_host != host_channel:
+        try:
+            client.delete_channel_message(old_host, old_msg)
+        except Exception:  # noqa: BLE001
+            pass
     if meta.get("channel_id") == host_channel and meta.get("message_id"):
         try:
             response = client._client.get(
@@ -282,7 +303,13 @@ def post_niches_vinted_intro_message(
     wh_id, wh_token = parsed
     guild_name, _, logo_url = client.fetch_guild_branding(guild_id)
     host_channel_id = _resolve_catalog_host_channel(channel_id)
+    settings = get_settings()
+    detector_channel = sanitize_discord_channel_id(
+        getattr(settings, "discord_channel_niches", "") or ""
+    )
     _purge_intro_channel_catalog_attachments(client, channel_id)
+    if detector_channel:
+        _purge_channel_catalog_attachments(client, detector_channel)
 
     download_url = ensure_catalog_download_url(
         client,

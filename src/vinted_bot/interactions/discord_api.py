@@ -674,6 +674,39 @@ class DiscordInteractionClient:
             getattr(self.settings, "discord_channel_mes_alertes", "") or ""
         )
 
+    def reglement_channel_id(self) -> str:
+        from vinted_bot.config import sanitize_discord_channel_id
+
+        return sanitize_discord_channel_id(
+            getattr(self.settings, "discord_channel_reglement", "") or ""
+        )
+
+    def reglement_verified_role_id(self) -> str:
+        from vinted_bot.config import sanitize_discord_channel_id
+
+        return sanitize_discord_channel_id(
+            getattr(self.settings, "discord_role_reglement_verified", "") or ""
+        )
+
+    def add_guild_member_role(
+        self,
+        guild_id: str,
+        user_id: int | str,
+        role_id: str,
+    ) -> None:
+        gid = sanitize_guild_id(guild_id)
+        rid = str(role_id or "").strip()
+        uid = str(user_id or "").strip()
+        if not gid or not rid or not uid:
+            raise ValueError("guild_id, user_id ou role_id manquant")
+        response = self._client.put(
+            f"/guilds/{gid}/members/{uid}/roles/{rid}",
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Add role {response.status_code}: {response.text[:400]}"
+            )
+
     def niches_channel_id(self) -> str:
         from vinted_bot.config import sanitize_discord_channel_id
 
@@ -700,6 +733,13 @@ class DiscordInteractionClient:
 
         return sanitize_discord_channel_id(
             getattr(self.settings, "discord_channel_niches_vinted", "") or ""
+        )
+
+    def vintify_channel_id(self) -> str:
+        from vinted_bot.config import sanitize_discord_channel_id
+
+        return sanitize_discord_channel_id(
+            getattr(self.settings, "discord_channel_vintify", "") or ""
         )
 
     def vinted_links_channel_id(self) -> str:

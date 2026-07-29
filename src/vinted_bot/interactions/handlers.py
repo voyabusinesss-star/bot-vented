@@ -18,6 +18,7 @@ from vinted_bot.interactions.alerts_panel import (
     build_edit_alert_modal,
     build_user_alerts_payload,
 )
+from vinted_bot.interactions.reglement_panel import REGLEMENT_ACCEPT
 from vinted_bot.interactions.discord_api import DiscordInteractionClient
 from vinted_bot.utils.logging import get_logger
 
@@ -808,6 +809,75 @@ def handle_alert_edit_modal(
     )
 
 
+def handle_reglement_accept(
+    client: DiscordInteractionClient,
+    interaction: dict[str, Any],
+) -> None:
+    user = _interaction_user(interaction)
+    user_id = int(user.get("id") or 0)
+    if not user_id:
+        client.respond_ephemeral(
+            interaction["id"],
+            interaction["token"],
+            "Impossible d'identifier ton compte Discord.",
+        )
+        return
+
+    guild_id = str(interaction.get("guild_id") or "").strip()
+    member = interaction.get("member") or {}
+    member_roles = {str(r) for r in (member.get("roles") or [])}
+    role_id = client.reglement_verified_role_id()
+
+    if role_id and role_id in member_roles:
+        client.respond_ephemeral(
+            interaction["id"],
+            interaction["token"],
+            "✅ Tu as déjà accepté le règlement — accès confirmé.",
+        )
+        return
+
+    if role_id:
+        try:
+            client.add_guild_member_role(guild_id, user_id, role_id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "reglement_role_failed",
+                user_id=user_id,
+                role_id=role_id,
+                error=str(exc)[:200],
+            )
+            client.respond_ephemeral(
+                interaction["id"],
+                interaction["token"],
+                (
+                    "❌ Impossible d'attribuer le rôle pour le moment.\n"
+                    "Contacte un admin — le bot doit avoir **Gérer les rôles** "
+                    "et le rôle doit être **sous** le rôle du bot."
+                ),
+            )
+            return
+        client.respond_ephemeral(
+            interaction["id"],
+            interaction["token"],
+            (
+                "✅ **Règlement accepté** — bienvenue sur Resello !\n\n"
+                "Tu peux maintenant accéder aux salons du serveur."
+            ),
+        )
+        log.info("reglement_accepted", user_id=user_id, role_id=role_id)
+        return
+
+    client.respond_ephemeral(
+        interaction["id"],
+        interaction["token"],
+        (
+            "✅ **Règlement accepté** — merci d'avoir pris connaissance "
+            "des règles du serveur."
+        ),
+    )
+    log.info("reglement_accepted_no_role", user_id=user_id)
+
+
 def dispatch_interaction(
     client: DiscordInteractionClient,
     interaction: dict[str, Any],
@@ -856,6 +926,9 @@ def dispatch_interaction(
             return
         if custom_id.startswith("alert:dm_toggle:"):
             handle_alert_dm_toggle(client, interaction)
+            return
+        if custom_id == REGLEMENT_ACCEPT:
+            handle_reglement_accept(client, interaction)
             return
 
     if interaction_type == 5:

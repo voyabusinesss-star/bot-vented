@@ -214,10 +214,16 @@ class Settings(BaseSettings):
     # Salon regroupement (#all-vetement)
     discord_channel_all: str = ""
     discord_channel_logs: str = ""
+    # Hébergement technique du xlsx catalogue (salon admin, jamais le détecteur public)
+    discord_channel_catalog_host: str = ""
     # Annonces liaison compte Vinted (visible serveur). Fallback : logs.
     discord_channel_vinted_links: str = ""
     # Salon #mes-alertes — panneau filtres privés
     discord_channel_mes_alertes: str = ""
+    # Salon règlement — validation par bouton (post-reglement)
+    discord_channel_reglement: str = ""
+    # Rôle attribué après acceptation du règlement (ID Discord)
+    discord_role_reglement_verified: str = ""
     # Salon alertes niches (fallback / combos)
     discord_channel_niches: str = ""
     # Salon demo / aperçu marketing détecteur (post-detector-apercu)
@@ -228,6 +234,11 @@ class Settings(BaseSettings):
     discord_channel_niches_vinted: str = ""
     discord_webhook_niches_vinted: str = ""
     niches_vinted_catalog_path: str = "config/Resello_1000_Niches_Vinted.xlsx"
+    # Salon Vintify (vintify.me) — intro marketing IA photos
+    discord_channel_vintify: str = ""
+    discord_webhook_vintify: str = ""
+    vintify_site_url: str = "https://vintify.me/"
+    vintify_preview_image_path: str = "config/vintify-preview.png"
     # Fiches produit live (deep-dive ~1h → analyse niche)
     discord_channel_fiches_produit: str = ""
     # Durée deep-dive d'une niche avant publication fiche (secondes, défaut 1h)
