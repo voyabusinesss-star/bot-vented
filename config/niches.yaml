@@ -17,7 +17,7 @@ defaults:
   min_margin_pct: 25
   min_margin_eur: 12
   niche_cooldown_hours: 12
-  max_discord_posts_per_cycle: 5
+  max_discord_posts_per_cycle: 1
 
 # Balayage newest multi-domaines (rotation à chaque cycle)
 # id: all = flux site entier ; sinon ID catalogue Vinted FR

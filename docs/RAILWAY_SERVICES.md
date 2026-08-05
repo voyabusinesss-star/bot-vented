@@ -54,13 +54,16 @@ DISCORD_POST_DELAY_SECONDS=0
 ### `bot-detector` (plan free = `niches`)
 ```
 APP_ROLE=niches
-NICHES_DETECTOR_ROUNDS=3          # cycles detector avant 1 fiche
-NICHES_PHASE_PAUSE_SECONDS=90     # pause entre phases (laisse Chromium mourir)
+NICHES_DETECTOR_WINDOW_SECONDS=2100   # ~35 min detector d'abord
+NICHES_DETECTOR_CYCLE_PAUSE_SECONDS=180
+FICHES_DEVELOP_SECONDS=900            # deep-dive ~15 min (1 fiche/h max)
 DISCORD_CHANNEL_NICHES=…
 DISCORD_CHANNEL_NICHES_DEMO=…
 DISCORD_CHANNEL_NICHES_VINTED=…
 DISCORD_CHANNEL_FICHES_PRODUIT=…
 ```
+
+Cadence code : **≤10 détections Discord / heure**, **1 fiche / heure**, jamais deux fois la même niche en fiche. Scrape public+privé = `bot-scrape` uniquement (inchangé).
 
 ### `bot-fiches` (plan payant seulement)
 ```

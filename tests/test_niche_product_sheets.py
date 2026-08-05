@@ -50,6 +50,24 @@ def test_effective_develop_seconds_caps_at_hourly_budget():
     assert capped >= 300.0
 
 
+def test_fiche_cooldown_always_one_hour_even_when_develop_paced():
+    with patch.object(fps, "hours_since_last_fiche", return_value=0.01):
+        rem = fps.fiche_cooldown_remaining_seconds(develop_paced=True)
+    assert rem > 3000.0
+    assert rem <= fps.FICHES_INTERVAL_SECONDS
+
+
+def test_fiche_cooldown_cleared_after_one_hour():
+    with patch.object(fps, "hours_since_last_fiche", return_value=1.01):
+        assert fps.fiche_cooldown_remaining_seconds(develop_paced=True) == 0.0
+
+
+def test_short_develop_default_for_shared_niches_service():
+    short = fps._effective_develop_seconds(900.0)
+    assert short == 900.0
+    assert short <= 1200.0
+
+
 def test_build_respects_min_score_floor():
     op = SimpleNamespace(
         niche_key="x",

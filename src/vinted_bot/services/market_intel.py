@@ -40,10 +40,12 @@ from vinted_bot.services.opportunity_engine import (
     board_hash_unchanged,
     build_opportunity_embed,
     build_pepite_from_opportunity_embed,
+    detector_hourly_posts_remaining,
     filter_publishable_opportunities,
     is_granular_niche,
     mark_board_hash,
     mark_opportunities_posted,
+    record_detector_hourly_posts,
     select_opportunities,
     _is_recently_posted_key,
     _load_recently_posted_keys,
@@ -1282,6 +1284,15 @@ def post_interesting_niches_to_discord(
         return 0
 
     prefer = prefer_keys or set()
+    hourly_left = detector_hourly_posts_remaining()
+    if hourly_left <= 0 and not force:
+        log.info(
+            "niches_hub_hourly_cap",
+            max_per_hour=10,
+            hint="~10 détections / heure — reprise dans l'heure",
+        )
+        return 0
+
     posted_map = _load_recently_posted_keys()
     from vinted_bot.services.opportunity_engine import (
         _is_recently_posted_name,
@@ -1301,10 +1312,14 @@ def post_interesting_niches_to_discord(
         others = [op for op in fresh if op.niche_key not in prefer]
         fresh = signaled + others
 
+    cycle_cap = MAX_OPPORTUNITIES_POSTED
+    if not force:
+        cycle_cap = min(cycle_cap, hourly_left)
+
     if force:
-        to_post = (fresh or publishable)[:MAX_OPPORTUNITIES_POSTED]
+        to_post = (fresh or publishable)[:cycle_cap]
     elif fresh:
-        to_post = fresh[:MAX_OPPORTUNITIES_POSTED]
+        to_post = fresh[:cycle_cap]
     else:
         log.info(
             "niches_hub_skipped_nothing_new",
@@ -1342,14 +1357,15 @@ def post_interesting_niches_to_discord(
 
     if posted and not failed:
         _mark_ranking_posted("ch:niches-hub")
-        mark_opportunities_posted(to_post)
-        mark_board_hash(to_post)
+        mark_opportunities_posted(to_post[:posted])
+        mark_board_hash(to_post[:posted])
+        record_detector_hourly_posts(posted)
         try:
             from vinted_bot.db.repositories import record_opportunity_history
             from vinted_bot.db.session import session_scope
 
             with session_scope() as session:
-                for op in to_post:
+                for op in to_post[:posted]:
                     record_opportunity_history(
                         session,
                         niche_key=op.niche_key,
@@ -1372,6 +1388,7 @@ def post_interesting_niches_to_discord(
         count=posted,
         niches=len(to_post),
         min_score=PUBLISH_MIN_SCORE,
+        hourly_remaining=detector_hourly_posts_remaining(),
     )
     return posted
 

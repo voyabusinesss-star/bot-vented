@@ -56,24 +56,39 @@ case "$ROLE" in
     ;;
 
   niches)
-    # Plan free : 1 Chromium à la fois — detector puis fiches (jamais en parallèle).
-    # Scrape public+privé reste sur APP_ROLE=scrape (bot-scrape).
-    DETECTOR_ROUNDS="${NICHES_DETECTOR_ROUNDS:-3}"
-    PAUSE_S="${NICHES_PHASE_PAUSE_SECONDS:-90}"
-    echo "[railway] niches: alternance detector ↔ fiches (rounds=${DETECTOR_ROUNDS}, pause=${PAUSE_S}s)"
+    # Plan free : TOUJOURS detector d'abord (fenêtre ~35 min), puis 1 tentative fiche.
+    # 1 Chromium à la fois — scrape public+privé reste sur APP_ROLE=scrape (intact).
+    # Cadence cible : ~10 détections Discord / h (cap code) + 1 fiche / h (cooldown).
+    DETECTOR_WINDOW_S="${NICHES_DETECTOR_WINDOW_SECONDS:-2100}"   # 35 min
+    CYCLE_PAUSE_S="${NICHES_DETECTOR_CYCLE_PAUSE_SECONDS:-180}" # 3 min entre cycles
+    PHASE_PAUSE_S="${NICHES_PHASE_PAUSE_SECONDS:-60}"
+    # Deep-dive court pour laisser de la RAM/temps au detector (env override OK)
+    export FICHES_DEVELOP_SECONDS="${FICHES_DEVELOP_SECONDS:-900}"
+    echo "[railway] niches: detector ${DETECTOR_WINDOW_S}s → fiche (develop=${FICHES_DEVELOP_SECONDS}s)"
     while true; do
-      r=1
-      while [ "$r" -le "$DETECTOR_ROUNDS" ]; do
-        echo "[railway] niches: phase detector cycle ${r}/${DETECTOR_ROUNDS}"
+      echo "[railway] niches: PHASE DETECTOR (fenêtre ${DETECTOR_WINDOW_S}s)"
+      deadline=$(( $(date +%s) + DETECTOR_WINDOW_S ))
+      cycle=0
+      while [ "$(date +%s)" -lt "$deadline" ]; do
+        cycle=$((cycle + 1))
+        echo "[railway] niches: detector cycle ${cycle}"
         uv run vinted-bot detector --once || true
-        echo "[railway] niches: pause ${PAUSE_S}s (RAM Chromium relâchée)"
-        sleep "$PAUSE_S"
-        r=$((r + 1))
+        now=$(date +%s)
+        left=$((deadline - now))
+        if [ "$left" -le 0 ]; then
+          break
+        fi
+        pause="$CYCLE_PAUSE_S"
+        if [ "$left" -lt "$pause" ]; then
+          pause="$left"
+        fi
+        echo "[railway] niches: pause detector ${pause}s (Chromium relâché)"
+        sleep "$pause"
       done
-      echo "[railway] niches: phase fiches (1 cycle)"
+      echo "[railway] niches: PHASE FICHES (1 cycle, niches déjà postées par detector)"
       uv run vinted-bot fiches-produit --once || true
-      echo "[railway] niches: pause ${PAUSE_S}s avant retour detector"
-      sleep "$PAUSE_S"
+      echo "[railway] niches: pause ${PHASE_PAUSE_S}s avant retour detector"
+      sleep "$PHASE_PAUSE_S"
     done
     ;;
 

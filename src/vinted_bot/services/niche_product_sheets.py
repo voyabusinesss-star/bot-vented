@@ -54,16 +54,18 @@ FICHES_SKIPPED_CHECKPOINT = "market:fiches:skipped_keys"
 FICHES_PENDING_MSG_CHECKPOINT = "market:fiches:pending_msg"
 FICHES_WAITING_MSG_CHECKPOINT = "market:fiches:waiting_msg"
 FICHES_INTERVAL_SECONDS = 3600.0
-# Deep-dive après sélection de la meilleure niche détecteur (1 h par défaut)
+# Deep-dive après sélection (défaut prod niches free ≈ 15–20 min via env)
 FICHES_DEVELOP_SECONDS = 3600.0
 FICHES_DEVELOP_FAST_SECONDS = 120.0
 # Deep-dive réel : minimum de tours scrape + durée effective
 MIN_DEVELOP_ROUNDS = 3
 MIN_DEVELOP_ELAPSED_RATIO = 0.75
-FICHES_POST_GAP_SECONDS = 45.0  # pause anti-spam entre deux deep-dives
+# Pause courte après un post réussi (le vrai plafond reste 1 fiche / heure)
+FICHES_POST_GAP_SECONDS = 60.0
 MIN_MOSAIC_PHOTOS = 6
 MAX_MOSAIC_PHOTOS = 10  # limite Discord embeds / message
-MAX_POSTED_FICHES_KEPT = 120
+# Ne jamais oublier une fiche déjà postée (anti-repost)
+MAX_POSTED_FICHES_KEPT = 5000
 MAX_SKIPPED_FICHES_KEPT = 80
 FICHES_SKIP_TTL_HOURS = 36.0
 MIN_FICHE_LISTINGS = max(MIN_PUBLISH_LISTINGS, 8)
@@ -145,14 +147,19 @@ def _develop_meets_minimum(
 
 
 def _effective_develop_seconds(requested: float | None) -> float:
-    """Cap deep-dive pour tenir le rythme 1 fiche / heure max."""
+    """Cap deep-dive pour tenir le rythme 1 fiche / heure + phase detector."""
     settings = get_settings()
     base = float(
         requested
         if requested is not None
         else getattr(settings, "fiches_develop_seconds", None) or FICHES_DEVELOP_SECONDS
     )
-    cap = max(300.0, FICHES_INTERVAL_SECONDS - 180.0)
+    # Laisse ~40 min / heure au détecteur (RAM + cadence ~10 détections)
+    cap = max(300.0, min(1200.0, FICHES_INTERVAL_SECONDS - 2100.0))
+    # Si env demande plus long (service fiches dédié), autorise jusqu'à intervalle-3min
+    dedicated_cap = max(300.0, FICHES_INTERVAL_SECONDS - 180.0)
+    if base >= 1800.0:
+        cap = dedicated_cap
     return min(max(30.0, base), cap)
 
 
@@ -163,9 +170,9 @@ def build_fiche_waiting_payload() -> dict[str, Any]:
                 "title": "⏳ Prochaine fiche produit",
                 "description": (
                     "En attente d'une niche **validée** par 🧠 **Détecteur de niches**.\n\n"
-                    "Dès qu'une opportunité est éligible, le deep-dive (~1 h) démarre "
+                    "Dès qu'une opportunité est éligible, le deep-dive démarre "
                     "et une fiche sera publiée **ici**.\n\n"
-                    "⏱️ **1 fiche maximum par heure**."
+                    "⏱️ **1 fiche maximum par heure** — jamais la même niche deux fois."
                 )[:3900],
                 "color": 0x5865F2,
                 "footer": {"text": "Fiches produit niches · Resello"},
@@ -351,12 +358,11 @@ def hours_since_last_fiche() -> float | None:
 
 
 def fiche_cooldown_remaining_seconds(*, develop_paced: bool = False) -> float:
+    """Toujours 1 fiche / heure max (develop_paced n'accélère plus le plafond)."""
+    del develop_paced  # conservé pour compat signature CLI / loop
     elapsed_h = hours_since_last_fiche()
     if elapsed_h is None:
         return 0.0
-    if develop_paced:
-        remaining = FICHES_POST_GAP_SECONDS - elapsed_h * 3600.0
-        return max(0.0, remaining)
     remaining = FICHES_INTERVAL_SECONDS - elapsed_h * 3600.0
     return max(0.0, remaining)
 
@@ -1333,8 +1339,8 @@ def post_next_fiche_to_discord(
     log.info(
         "fiche_chain_next",
         channel_id=channel,
-        gap_s=int(FICHES_POST_GAP_SECONDS),
-        hint="Prochaine niche après courte pause",
+        gap_s=int(FICHES_INTERVAL_SECONDS),
+        hint="Prochaine fiche au plus tôt dans 1 h (niche différente)",
     )
     return {
         "posted": 1,
@@ -1387,7 +1393,7 @@ def run_fiches_loop(
                 headless=headless,
             )
             if summary.get("posted"):
-                sleep_for = FICHES_POST_GAP_SECONDS
+                sleep_for = FICHES_INTERVAL_SECONDS
                 log.info(
                     "fiche_loop_next_start_scheduled",
                     seconds=int(sleep_for),

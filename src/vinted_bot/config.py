@@ -331,7 +331,7 @@ class Settings(BaseSettings):
     # Fiches produit live (deep-dive ~1h → analyse niche)
     discord_channel_fiches_produit: str = ""
     # Durée deep-dive d'une niche avant publication fiche (secondes, défaut 1h)
-    fiches_develop_seconds: float = Field(default=3600.0, ge=30.0)
+    fiches_develop_seconds: float = Field(default=900.0, ge=30.0)
     # Market intel — salons dédiés (détecteur de niches)
     discord_channel_marques: str = ""
     discord_channel_modeles: str = ""

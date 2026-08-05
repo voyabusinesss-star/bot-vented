@@ -78,7 +78,10 @@ _FAMOUS_NEED_MODEL = frozenset(
 MIN_OPPORTUNITY_SCORE = 55.0
 # Seuil publication Discord (pipeline permanent) — uniquement opportunités intéressantes
 PUBLISH_MIN_SCORE = 65.0
-MAX_OPPORTUNITIES_POSTED = 8
+# 1 détection Discord par cycle (cadence ~10/h via hourly cap + intervalle)
+MAX_OPPORTUNITIES_POSTED = 1
+DETECTOR_MAX_POSTS_PER_HOUR = 10
+DETECTOR_HOURLY_CHECKPOINT = "market:opp:hourly_posts"
 # Une niche = ensemble de produits similaires — jamais 1 seule annonce
 MIN_NICHE_LISTINGS = 5
 MIN_NICHE_SELLERS = 2
@@ -89,9 +92,9 @@ MIN_PRODUCT_OBJECT_N = 5
 POSTED_NICHES_CHECKPOINT = "market:opp:posted_keys"
 POSTED_BOARD_HASH_CHECKPOINT = "market:opp:board_hash"
 # Ne jamais republier la même niche trop tôt
-POSTED_DOWNRANK_HOURS = 96.0
-POSTED_NAME_COOLDOWN_HOURS = 72.0
-MAX_POSTED_KEYS_KEPT = 200
+POSTED_DOWNRANK_HOURS = 168.0  # 7 jours
+POSTED_NAME_COOLDOWN_HOURS = 168.0
+MAX_POSTED_KEYS_KEPT = 2000
 
 # Catégories hors mode fashion (aligné market_categories.yaml)
 _OBJECT_CATEGORIES = frozenset(
@@ -1487,6 +1490,54 @@ def was_opportunity_recently_shown(op: Opportunity) -> bool:
     return _is_recently_posted_key(
         op.niche_key, _load_recently_posted_keys()
     ) or _is_recently_posted_name(op.name, _load_recently_posted_names())
+
+
+def detector_hourly_posts_remaining(
+    *,
+    max_per_hour: int = DETECTOR_MAX_POSTS_PER_HOUR,
+) -> int:
+    """Combien de posts détecteur encore autorisés dans l'heure glissante."""
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=1.0)
+    with session_scope() as session:
+        data = get_checkpoint(session, DETECTOR_HOURLY_CHECKPOINT) or {}
+    raw = data.get("ats") if isinstance(data, dict) else None
+    if not isinstance(raw, list):
+        return max_per_hour
+    kept = 0
+    for item in raw:
+        age = _parse_iso_age_hours(str(item))
+        if age is not None and age < 1.0:
+            kept += 1
+    return max(0, int(max_per_hour) - kept)
+
+
+def record_detector_hourly_posts(count: int) -> None:
+    """Enregistre des posts détecteur pour le plafond horaire."""
+    if count <= 0:
+        return
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=1.0)
+    with session_scope() as session:
+        data = get_checkpoint(session, DETECTOR_HOURLY_CHECKPOINT) or {}
+        raw = list(data.get("ats") or []) if isinstance(data, dict) else []
+        kept: list[str] = []
+        for item in raw:
+            try:
+                dt = datetime.fromisoformat(str(item).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            if dt >= cutoff:
+                kept.append(dt.isoformat())
+        stamp = now.isoformat()
+        kept.extend([stamp] * int(count))
+        set_checkpoint(
+            session,
+            DETECTOR_HOURLY_CHECKPOINT,
+            {"ats": kept[-DETECTOR_MAX_POSTS_PER_HOUR * 3 :]},
+        )
 
 
 def mark_opportunities_posted(ops: Sequence[Opportunity]) -> None:
