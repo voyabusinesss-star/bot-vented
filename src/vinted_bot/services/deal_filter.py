@@ -86,6 +86,9 @@ class DealFilterSettings:
     reject_shoes_unless_allowed: bool = True
     # Rejette les annonces type replica / fake
     reject_replicas: bool = True
+    # Si True : hard-reject si prix > max ET marge < minimum_profit
+    # (désactivé par défaut — on laisse passer, le score décide)
+    enforce_price_or_margin: bool = False
 
 
 @dataclass(slots=True, frozen=True)
@@ -253,6 +256,9 @@ def load_deal_filters(path: str | None = None) -> DealFiltersConfig:
             settings_raw.get("reject_shoes_unless_allowed", True)
         ),
         reject_replicas=bool(settings_raw.get("reject_replicas", True)),
+        enforce_price_or_margin=bool(
+            settings_raw.get("enforce_price_or_margin", False)
+        ),
     )
 
     scoring_raw = raw.get("scoring") or {}
@@ -905,28 +911,30 @@ def evaluate_deal(
 
     estimated_profit = rule.average_resell - buy_price
 
-    # Règle métier : (prix <= max) OU (marge >= min)
-    under_max = buy_price <= rule.max_buy_price
-    good_margin = estimated_profit >= rule.minimum_profit
-    if not under_max and not good_margin:
-        return DealEvaluation(
-            should_post=False,
-            score=0,
-            level="skip",
-            level_label=DEAL_LEVEL_LABELS["skip"],
-            brand_key=brand_cfg.key,
-            brand_display=brand_cfg.display_name,
-            category=category,
-            category_label=category_label(category),
-            buy_price=buy_price,
-            average_resell=rule.average_resell,
-            estimated_profit=estimated_profit,
-            max_buy_price=rule.max_buy_price,
-            minimum_profit=rule.minimum_profit,
-            rarity=rule.rarity,
-            reason="price_and_margin_too_weak",
-            age_minutes=age_minutes,
-        )
+    # Optionnel : hard-reject si prix trop haut ET marge trop faible.
+    # Désactivé par défaut (enforce_price_or_margin: false) — le score décide.
+    if cfg.settings.enforce_price_or_margin:
+        under_max = buy_price <= rule.max_buy_price
+        good_margin = estimated_profit >= rule.minimum_profit
+        if not under_max and not good_margin:
+            return DealEvaluation(
+                should_post=False,
+                score=0,
+                level="skip",
+                level_label=DEAL_LEVEL_LABELS["skip"],
+                brand_key=brand_cfg.key,
+                brand_display=brand_cfg.display_name,
+                category=category,
+                category_label=category_label(category),
+                buy_price=buy_price,
+                average_resell=rule.average_resell,
+                estimated_profit=estimated_profit,
+                max_buy_price=rule.max_buy_price,
+                minimum_profit=rule.minimum_profit,
+                rarity=rule.rarity,
+                reason="price_and_margin_too_weak",
+                age_minutes=age_minutes,
+            )
 
     score = _score_deal(
         buy_price=buy_price,

@@ -60,14 +60,17 @@ def test_evaluate_pepite_stone_island() -> None:
     assert "PÉPITE" in deal.level_label
 
 
-def test_evaluate_reject_too_expensive_low_margin() -> None:
+def test_evaluate_no_longer_hard_rejects_expensive_low_margin() -> None:
+    # enforce_price_or_margin=false : plus de hard-reject price_and_margin_too_weak
     deal = evaluate_deal(
         brand="Ralph Lauren",
         title="Polo Ralph Lauren",
         price_cents=4500,  # 45€ > max 25, marge = 50-45 = 5 < min 20
+        raw_json={"created_at_ts": datetime.now(timezone.utc).timestamp()},
     )
-    assert deal.should_post is False
-    assert deal.reason == "price_and_margin_too_weak"
+    assert deal.reason != "price_and_margin_too_weak"
+    # Peut poster ou être skip pour score — mais pas pour marge faible
+    assert deal.reason in ("ok", "ok_fallback", "score_too_low")
 
 
 def test_evaluate_accept_via_margin_even_if_over_max() -> None:

@@ -8,8 +8,9 @@
 # Aucune modification de code nécessaire.
 #
 # rarity: low | medium | high | ultra
-# Une annonce est postée si score >= min_score_to_post ET
-#   (prix <= max_buy_price) OU (marge >= minimum_profit)
+# Une annonce est postée si score >= min_score_to_post.
+# Optionnel (enforce_price_or_margin) : aussi exiger
+#   (prix <= max_buy_price) OU (marge >= minimum_profit) — désactivé par défaut.
 
 settings:
   enabled: true
@@ -29,6 +30,9 @@ settings:
   reject_shoes_unless_allowed: true
   # Rejette replica / fake / 1:1
   reject_replicas: true
+  # false = ne bloque plus les annonces « prix haut + petite marge »
+  # (le score Discord décide encore via min_score_to_post)
+  enforce_price_or_margin: false
 
 # Signaux ENFANT clairs uniquement.
 # XL / XXL / XXXL adultes ne sont JAMAIS exclus pour la taille seule.
