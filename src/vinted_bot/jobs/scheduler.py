@@ -46,11 +46,8 @@ def run_scrape_loop(
     )
     restart_every = max(1, cfg.browser_restart_every_cycles)
     reconnect_delay = max(5.0, cfg.reconnect_delay_seconds)
-    # Toutes les marques à chaque tour = spawn continu (pas de file d'attente)
-    yaml_batch_size = max(1, len(active_searches_for_channels(
-        settings.brand_channel_map(),
-        sneaker_map=settings.sneaker_channel_map(),
-    )) or 64)
+    # Petits lots = posts Discord plus tôt (évite 15 min de silence sur 45 marques)
+    yaml_batch_size = 4
 
     log.info(
         "loop_start",
@@ -92,6 +89,7 @@ def run_scrape_loop(
                 now = time.monotonic()
 
                 if browser is None:
+                    write_scrape_heartbeat(cycle=cycle, status="browser_start")
                     browser = VintedBrowser(
                         base_url=settings.vinted_base_url,
                         headless=headless,
@@ -100,6 +98,7 @@ def run_scrape_loop(
                     browser.start()
                     browser.warm_up()
                     cycles_on_browser = 0
+                    write_scrape_heartbeat(cycle=cycle, status="browser_ready")
 
 
                 # 1) Toujours prioriser les filtres privés dès que l'intervalle est écoulé
@@ -177,7 +176,9 @@ def run_scrape_loop(
                         posted=sum(r.items_posted_discord for r in results),
                         created=sum(r.items_created for r in results),
                         found=sum(r.items_found for r in results),
+                        skipped_deal=sum(r.items_skipped_deal for r in results),
                         brands=len(results),
+                        brand_names=[t.brand for t in batch[:8]],
                     )
                 elif ran_filters:
                     log.info(
