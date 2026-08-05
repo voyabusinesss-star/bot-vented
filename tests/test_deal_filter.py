@@ -60,33 +60,30 @@ def test_evaluate_pepite_stone_island() -> None:
     assert "PÉPITE" in deal.level_label
 
 
-def test_evaluate_no_longer_hard_rejects_expensive_low_margin() -> None:
-    # enforce_price_or_margin=false : plus de hard-reject price_and_margin_too_weak
+def test_evaluate_reject_price_above_max_without_margin_bypass() -> None:
+    # Prix > max → reject (même si on ne regarde plus la marge)
     deal = evaluate_deal(
         brand="Ralph Lauren",
         title="Polo Ralph Lauren",
-        price_cents=4500,  # 45€ > max 25, marge = 50-45 = 5 < min 20
+        price_cents=4500,  # 45€ > max polo 25
         raw_json={"created_at_ts": datetime.now(timezone.utc).timestamp()},
     )
-    assert deal.reason != "price_and_margin_too_weak"
-    # Peut poster ou être skip pour score — mais pas pour marge faible
-    assert deal.reason in ("ok", "ok_fallback", "score_too_low")
+    assert deal.should_post is False
+    assert deal.reason == "price_above_max"
 
 
-def test_evaluate_accept_via_margin_even_if_over_max() -> None:
-    # Prix > max_buy mais marge OK (condition 2)
-    # max_buy polo RL = 25, average 50, min profit 20
-    # buy 28 → margin 22 >= 20, under_max False → still OK
+def test_evaluate_accept_under_max_even_with_thin_margin() -> None:
+    # Sous le max : on poste même si marge estimée faible (pas de filtre marge)
+    # max_buy polo RL = 25, average 50 → buy 24, marge 26 peut être OK;
+    # buy 24 under max always passes price gate.
     deal = evaluate_deal(
         brand="Ralph Lauren",
         title="Polo Ralph Lauren bleu",
-        price_cents=2800,
+        price_cents=2400,
         raw_json={"created_at_ts": datetime.now(timezone.utc).timestamp()},
     )
-    assert deal.buy_price == 28.0
-    assert deal.estimated_profit == 22.0
-    assert deal.should_post is True or deal.reason == "score_too_low"
-    # Au minimum la règle prix/marge doit passer (pas price_and_margin_too_weak)
+    assert deal.buy_price == 24.0
+    assert deal.reason != "price_above_max"
     assert deal.reason != "price_and_margin_too_weak"
 
 
