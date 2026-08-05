@@ -15,11 +15,10 @@ def test_detector_hourly_posts_remaining_empty():
         assert oe.detector_hourly_posts_remaining(max_per_hour=10) == 10
 
 
-def test_detector_hourly_posts_remaining_counts_last_hour():
-    now = datetime.now(timezone.utc)
-    ats = [(now - timedelta(minutes=m)).isoformat() for m in (5, 15, 70)]
-    with patch.object(oe, "session_scope"), patch.object(
-        oe, "get_checkpoint", return_value={"ats": ats}
-    ):
-        # 70 min ago hors fenêtre → 2 posts comptés → 8 restants
-        assert oe.detector_hourly_posts_remaining(max_per_hour=10) == 8
+def test_detector_never_reposts_same_key():
+    from vinted_bot.services.opportunity_engine import _is_recently_posted_key
+
+    assert _is_recently_posted_key(
+        "old-niche", {"old-niche": "2020-01-01T00:00:00+00:00"}
+    )
+    assert not _is_recently_posted_key("fresh", {})

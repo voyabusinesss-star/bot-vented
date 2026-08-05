@@ -91,10 +91,10 @@ MIN_BRAND_CATEGORY_N = 8
 MIN_PRODUCT_OBJECT_N = 5
 POSTED_NICHES_CHECKPOINT = "market:opp:posted_keys"
 POSTED_BOARD_HASH_CHECKPOINT = "market:opp:board_hash"
-# Ne jamais republier la même niche trop tôt
-POSTED_DOWNRANK_HOURS = 168.0  # 7 jours
-POSTED_NAME_COOLDOWN_HOURS = 168.0
-MAX_POSTED_KEYS_KEPT = 2000
+# Ne jamais republier la même niche (anti-doublon Discord)
+POSTED_DOWNRANK_HOURS = 8760.0  # ~1 an (pratique = permanent)
+POSTED_NAME_COOLDOWN_HOURS = 8760.0
+MAX_POSTED_KEYS_KEPT = 5000
 
 # Catégories hors mode fashion (aligné market_categories.yaml)
 _OBJECT_CATEGORIES = frozenset(
@@ -1465,9 +1465,13 @@ def _is_recently_posted_key(
     *,
     hours: float = POSTED_DOWNRANK_HOURS,
 ) -> bool:
+    """True si la niche a déjà été postée (TTL très long ≈ jamais republier)."""
     raw = posted_map.get(niche_key)
     if not raw:
         return False
+    # Présence en checkpoint = déjà publié → ne jamais republier la même détection
+    if hours >= 8760.0:
+        return True
     age = _parse_iso_age_hours(raw)
     return age is not None and age < hours
 
@@ -1481,6 +1485,8 @@ def _is_recently_posted_name(
     raw = names_map.get(_norm_name(name))
     if not raw:
         return False
+    if hours >= 8760.0:
+        return True
     age = _parse_iso_age_hours(raw)
     return age is not None and age < hours
 
