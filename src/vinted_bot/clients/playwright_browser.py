@@ -37,6 +37,10 @@ def launch_vinted_browser(
             "--no-sandbox",
             "--disable-setuid-sandbox",
             "--disable-gpu",
+            "--renderer-process-limit=2",
+            "--disable-extensions",
+            "--disable-background-networking",
+            "--mute-audio",
         ],
         "ignore_default_args": ["--enable-automation"],
     }

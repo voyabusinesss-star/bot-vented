@@ -172,8 +172,8 @@ class Settings(BaseSettings):
     request_delay_seconds: float = 1.0
     max_retries: int = 3
     scrape_headless: bool = True
-    # Navigateurs Playwright permanents (1 par worker). 6 ≈ bon compromis Railway.
-    scrape_parallel_workers: int = Field(default=6, ge=1, le=20)
+    # Navigateurs Playwright permanents (1 par worker). 3 ≈ sûr sur Railway (RAM).
+    scrape_parallel_workers: int = Field(default=3, ge=1, le=20)
     # Pause entre deux recherches du même worker (2–5 s)
     scrape_poll_seconds_min: float = Field(default=2.0, ge=0.5)
     scrape_poll_seconds_max: float = Field(default=5.0, ge=0.5)

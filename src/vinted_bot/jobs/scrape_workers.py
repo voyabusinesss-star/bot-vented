@@ -128,6 +128,7 @@ class BrandWorker:
         poll_max: float = 5.0,
         restart_every: int = 40,
         reconnect_delay: float = 10.0,
+        start_delay: float = 0.0,
     ) -> None:
         self.worker_id = worker_id
         self.targets = list(targets)
@@ -139,6 +140,7 @@ class BrandWorker:
         self.poll_max = poll_max
         self.restart_every = max(1, restart_every)
         self.reconnect_delay = max(5.0, reconnect_delay)
+        self.start_delay = float(start_delay)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._browser: VintedBrowser | None = None
@@ -211,6 +213,8 @@ class BrandWorker:
         self._successes = 0
 
     def _run(self) -> None:
+        if self.start_delay > 0:
+            time.sleep(self.start_delay)
         log.info(
             "brand_worker_start",
             worker_id=self.worker_id,
@@ -475,10 +479,13 @@ def run_permanent_scrape_pool(
             poll_max=poll_max,
             restart_every=restart_every,
             reconnect_delay=reconnect,
+            start_delay=float(i) * 15.0,
         )
         w.start()
         brand_workers.append(w)
 
+    # Filtre worker après les brands (évite trop de Chromium d'un coup)
+    time.sleep(max(5.0, float(len(groups)) * 5.0))
     filter_worker = FilterWorker(
         proxy_url=assign_proxy_for_worker(proxies, len(groups)) if proxies else None,
         all_proxies=proxies,
