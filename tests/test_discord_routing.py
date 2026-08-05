@@ -66,7 +66,31 @@ def test_is_allowed_brand() -> None:
     assert is_allowed_brand("Jordan", channels, sneaker_map={"jordan": "888"}) is True
 
 
-def test_belongs_in_all_vetement() -> None:
+def test_nike_clothing_vs_sneakers_routing() -> None:
+    """Nike vêtement → indémodables ; Nike chaussure → Pépites Sneakers."""
+    clothing = {"nike": "nike-vetements", "carhartt": "carhartt-ch"}
+    sneakers = {"nike": "nike-sneakers", "jordan": "jordan-ch"}
+    assert (
+        route_channel("Nike", clothing, sneaker_map=sneakers, is_shoe=False)
+        == "nike-vetements"
+    )
+    assert (
+        route_channel("Nike", clothing, sneaker_map=sneakers, is_shoe=True)
+        == "nike-sneakers"
+    )
+    assert belongs_in_all_vetement(
+        "Nike",
+        is_shoe=False,
+        brand_channel_id="nike-vetements",
+        sneaker_channel_ids=set(sneakers.values()),
+    )
+    assert not belongs_in_all_vetement(
+        "Nike",
+        is_shoe=True,
+        brand_channel_id="nike-sneakers",
+        sneaker_channel_ids=set(sneakers.values()),
+    )
+
     sneaker_ids = {"999", "888"}
     assert belongs_in_all_vetement("Nike", is_shoe=False) is True
     assert belongs_in_all_vetement("Nike", is_shoe=True) is False

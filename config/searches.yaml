@@ -32,14 +32,27 @@ searches:
   - brand: nike
     query: nike
     brand_ids: [53]
-    # vêtements + chaussures (salon sneakers si DISCORD_CHANNEL_NIKE_SNEAKERS)
-    catalog_ids: [4, 5, 1231, 1242]
+    # Vêtements → salon Nike indémodables + ALL
+    catalog_ids: [4, 5]
+    priority: high
+    enabled: true
+  - brand: nike
+    query: nike
+    brand_ids: [53]
+    # Chaussures → Pépites Sneakers (DISCORD_CHANNEL_NIKE_SNEAKERS)
+    catalog_ids: [1231, 1242]
     priority: high
     enabled: true
   - brand: adidas
     query: adidas
     brand_ids: [14]
-    catalog_ids: [4, 5, 1231, 1242]
+    catalog_ids: [4, 5]
+    priority: high
+    enabled: true
+  - brand: adidas
+    query: adidas
+    brand_ids: [14]
+    catalog_ids: [1231, 1242]
     priority: high
     enabled: true
   - brand: the north face
@@ -296,13 +309,13 @@ searches:
     enabled: true
 
 defaults:
-  max_items: 6
+  max_items: 8
   # Pause minimale entre marques (fluidité)
-  delay_between_searches_seconds: 0.15
+  delay_between_searches_seconds: 0.1
   # Cycle quasi continu — les nouvelles annonces sont captées vite
-  loop_interval_seconds: 5
-  browser_restart_every_cycles: 25
-  reconnect_delay_seconds: 15
+  loop_interval_seconds: 2
+  browser_restart_every_cycles: 30
+  reconnect_delay_seconds: 12
   # Alerte si un cycle dure > factor * moyenne mobile
   slow_cycle_factor: 2.0
   order: newest_first
@@ -310,4 +323,4 @@ defaults:
   # 4 = Femmes > Vêtements, 5 = Hommes > Vêtements
   catalog_ids: [4, 5]
   # Max posts Discord par marque et passage (filtre deal + âge avant)
-  max_discord_posts: 5
+  max_discord_posts: 8

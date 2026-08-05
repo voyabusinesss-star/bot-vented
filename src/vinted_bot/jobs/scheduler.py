@@ -47,8 +47,8 @@ def run_scrape_loop(
     restart_every = max(1, cfg.browser_restart_every_cycles)
     reconnect_delay = max(5.0, cfg.reconnect_delay_seconds)
     # Combien de marques YAML entre deux pulses filtres
-    # 4 = tour plus rapide sur Nike / classiques (évite annonces trop vieilles)
-    yaml_batch_size = 4
+    # 8 ≈ couverture continue (Nike vêtements + sneakers séparés, etc.)
+    yaml_batch_size = 8
 
     log.info(
         "loop_start",
@@ -193,13 +193,16 @@ def run_scrape_loop(
                 time.sleep(reconnect_delay)
                 continue
 
-            # Attente courte avant le prochain tour (filtres ~20s)
-            if filter_targets:
+            # Attente courte = flux quasi continu sur tous les salons.
+            # Les filtres privés gardent leur cadence (~20s) sans bloquer les marques.
+            if batch or ran_filters:
+                remaining = max(1.0, float(interval))
+            elif filter_targets:
                 remaining = max(
                     2.0, filter_interval - (time.monotonic() - last_filter_pulse)
                 )
             else:
-                remaining = max(5.0, interval)
+                remaining = max(2.0, float(interval))
             log.info("loop_sleep", seconds=round(remaining, 1), next_cycle=cycle + 1)
             time.sleep(remaining)
     finally:
