@@ -20,8 +20,9 @@ _supervise() {
 }
 
 ENABLE_SCRAPE="${ENABLE_SCRAPE:-1}"
-ENABLE_DETECTOR="${ENABLE_DETECTOR:-1}"
-ENABLE_FICHES="${ENABLE_FICHES:-1}"
+# Détecteur / fiches off par défaut : libère la RAM pour le scrape Discord
+ENABLE_DETECTOR="${ENABLE_DETECTOR:-0}"
+ENABLE_FICHES="${ENABLE_FICHES:-0}"
 
 if [ "$ENABLE_SCRAPE" = "1" ] || [ "$ENABLE_SCRAPE" = "true" ]; then
   _supervise "scrape" uv run vinted-bot scrape --loop

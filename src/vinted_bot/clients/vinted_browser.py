@@ -214,8 +214,13 @@ class VintedBrowser:
 
     def _warm_up_impl(self) -> None:
         self.rate_limiter.wait()
-        log.info("browser_warmup", url=self.base_url)
-        self.page.goto(self.base_url, wait_until="domcontentloaded")
+        log.info("browser_warmup", url=self.base_url, proxy=bool(self.proxy_url))
+        # commit = plus léger que domcontentloaded (moins de crashes RAM)
+        self.page.goto(self.base_url, wait_until="commit", timeout=min(self.timeout_ms, 30_000))
+        try:
+            self.page.wait_for_timeout(800)
+        except Exception:  # noqa: BLE001
+            pass
         self._dismiss_cookies_if_present()
 
     def _dismiss_cookies_if_present(self) -> None:

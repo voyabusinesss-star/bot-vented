@@ -484,8 +484,8 @@ def run_permanent_scrape_pool(
         w.start()
         brand_workers.append(w)
 
-    # Filtre worker après les brands (évite trop de Chromium d'un coup)
-    time.sleep(max(5.0, float(len(groups)) * 5.0))
+    # Filtre worker : démarre après le 1er brand (évite 2 Chromium au boot)
+    time.sleep(45.0 if len(groups) <= 1 else max(5.0, float(len(groups)) * 5.0))
     filter_worker = FilterWorker(
         proxy_url=assign_proxy_for_worker(proxies, len(groups)) if proxies else None,
         all_proxies=proxies,
