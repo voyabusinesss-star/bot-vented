@@ -55,6 +55,14 @@ case "$ROLE" in
     exec uv run vinted-bot fiches-produit --loop
     ;;
 
+  niches)
+    # Plan free : detector + fiches sur un seul service (sans scrape Discord)
+    echo "[railway] démarrage detector + fiches (supervisés)"
+    _supervise "detector" uv run vinted-bot detector --loop
+    echo "[railway] démarrage fiches produit (foreground)"
+    exec uv run vinted-bot fiches-produit --loop
+    ;;
+
   all)
     # Legacy : tout dans un container (risque OOM)
     _migrate
@@ -75,7 +83,7 @@ case "$ROLE" in
     ;;
 
   *)
-    echo "[railway] APP_ROLE inconnu: ${ROLE} (api|scrape|detector|fiches|all)" >&2
+    echo "[railway] APP_ROLE inconnu: ${ROLE} (api|scrape|detector|fiches|niches|all)" >&2
     exit 1
     ;;
 esac

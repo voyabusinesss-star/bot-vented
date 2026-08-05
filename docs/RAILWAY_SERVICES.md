@@ -1,6 +1,18 @@
-# Railway : 4 services (même image / même repo)
+# Railway : multi-services (même image / même repo)
 
-Architecture recommandée pour éviter les OOM Chromium :
+Architecture pour éviter les OOM Chromium (scrape + detector + fiches séparés de l’API Discord).
+
+## Plan free (actuel) — 3 services
+
+| Service        | `APP_ROLE` | Rôle                                         | HTTP public |
+|----------------|------------|----------------------------------------------|-------------|
+| `bot-vented`   | `api`      | Discord + Whop + migrations                  | oui `/health` |
+| `bot-scrape`   | `scrape`   | Salons publics + filtres privés (Playwright) | non |
+| `bot-detector` | `niches`   | Détecteur **+** fiches (supervisés, sans scrape) | non |
+
+`bot-fiches` dédié nécessite un upgrade de plan Railway (limite de resources free).
+
+## Plan payant — 4 services
 
 | Service        | `APP_ROLE`  | Rôle                                      | HTTP public |
 |----------------|-------------|-------------------------------------------|-------------|
@@ -35,19 +47,22 @@ DISCORD_POST_DELAY_SECONDS=0
 ```
 + tous les `DISCORD_CHANNEL_*` marques / sneakers / ALL.
 
-### `bot-detector`
+### `bot-detector` (plan free = `niches`)
 ```
-APP_ROLE=detector
+APP_ROLE=niches
 DISCORD_CHANNEL_NICHES=…
 DISCORD_CHANNEL_NICHES_DEMO=…
 DISCORD_CHANNEL_NICHES_VINTED=…
+DISCORD_CHANNEL_FICHES_PRODUIT=…
 ```
 
-### `bot-fiches`
+### `bot-fiches` (plan payant seulement)
 ```
 APP_ROLE=fiches
 DISCORD_CHANNEL_FICHES_PRODUIT=…
 ```
+
+Sur plan free, ne pas créer `bot-fiches` : utiliser `APP_ROLE=niches` sur `bot-detector`.
 
 ## Création CLI (exemple)
 
