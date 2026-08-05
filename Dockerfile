@@ -12,9 +12,7 @@ ENV UV_COMPILE_BYTECODE=1 \
     WHOP_WEBHOOK_HOST=0.0.0.0 \
     WHOP_WEBHOOK_PORT=8080 \
     SCRAPE_HEADLESS=true \
-    ENABLE_SCRAPE=1 \
-    ENABLE_DETECTOR=0 \
-    ENABLE_FICHES=0
+    APP_ROLE=api
 
 # Dépendances système Playwright / Chromium (Docker / Railway)
 RUN apt-get update && apt-get install -y --no-install-recommends \
