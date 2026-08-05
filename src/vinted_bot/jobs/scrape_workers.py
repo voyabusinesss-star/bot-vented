@@ -479,7 +479,7 @@ def run_permanent_scrape_pool(
             poll_max=poll_max,
             restart_every=restart_every,
             reconnect_delay=reconnect,
-            start_delay=float(i) * 15.0,
+            start_delay=float(i) * 8.0,
         )
         w.start()
         brand_workers.append(w)
