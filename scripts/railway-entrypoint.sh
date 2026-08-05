@@ -5,7 +5,7 @@
 #   api       → Discord gateway + Whop webhook + migrations (HTTP /health)
 #   scrape    → scrape public + filtres privés (Playwright)
 #   detector  → détecteur de niches
-#   fiches    → fiches produit niches
+#   niches    → detector puis fiches à tour de rôle (plan free, 1 Chromium)
 #   all       → legacy mono-service (déconseillé)
 set -eu
 
@@ -56,11 +56,25 @@ case "$ROLE" in
     ;;
 
   niches)
-    # Plan free : detector + fiches sur un seul service (sans scrape Discord)
-    echo "[railway] démarrage detector + fiches (supervisés)"
-    _supervise "detector" uv run vinted-bot detector --loop
-    echo "[railway] démarrage fiches produit (foreground)"
-    exec uv run vinted-bot fiches-produit --loop
+    # Plan free : 1 Chromium à la fois — detector puis fiches (jamais en parallèle).
+    # Scrape public+privé reste sur APP_ROLE=scrape (bot-scrape).
+    DETECTOR_ROUNDS="${NICHES_DETECTOR_ROUNDS:-3}"
+    PAUSE_S="${NICHES_PHASE_PAUSE_SECONDS:-90}"
+    echo "[railway] niches: alternance detector ↔ fiches (rounds=${DETECTOR_ROUNDS}, pause=${PAUSE_S}s)"
+    while true; do
+      r=1
+      while [ "$r" -le "$DETECTOR_ROUNDS" ]; do
+        echo "[railway] niches: phase detector cycle ${r}/${DETECTOR_ROUNDS}"
+        uv run vinted-bot detector --once || true
+        echo "[railway] niches: pause ${PAUSE_S}s (RAM Chromium relâchée)"
+        sleep "$PAUSE_S"
+        r=$((r + 1))
+      done
+      echo "[railway] niches: phase fiches (1 cycle)"
+      uv run vinted-bot fiches-produit --once || true
+      echo "[railway] niches: pause ${PAUSE_S}s avant retour detector"
+      sleep "$PAUSE_S"
+    done
     ;;
 
   all)

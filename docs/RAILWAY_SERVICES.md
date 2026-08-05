@@ -7,8 +7,12 @@ Architecture pour éviter les OOM Chromium (scrape + detector + fiches séparés
 | Service        | `APP_ROLE` | Rôle                                         | HTTP public |
 |----------------|------------|----------------------------------------------|-------------|
 | `bot-vented`   | `api`      | Discord + Whop + migrations                  | oui `/health` |
-| `bot-scrape`   | `scrape`   | Salons publics + filtres privés (Playwright) | non |
-| `bot-detector` | `niches`   | Détecteur **+** fiches (supervisés, sans scrape) | non |
+| `bot-scrape`   | `scrape`   | **Salons publics + alertes filtres privés**  | non |
+| `bot-detector` | `niches`   | Détecteur puis fiches **à tour de rôle** (1 Chromium) | non |
+
+Le scrape privé n’est **pas** un 4ᵉ service : il tourne déjà dans `bot-scrape` (même boucle Playwright que les salons publics + worker filtres DM).
+
+Sur `niches`, detector et fiches s’alternent (jamais 2 navigateurs en même temps) pour éviter les `Target crashed`.
 
 `bot-fiches` dédié nécessite un upgrade de plan Railway (limite de resources free).
 
@@ -50,6 +54,8 @@ DISCORD_POST_DELAY_SECONDS=0
 ### `bot-detector` (plan free = `niches`)
 ```
 APP_ROLE=niches
+NICHES_DETECTOR_ROUNDS=3          # cycles detector avant 1 fiche
+NICHES_PHASE_PAUSE_SECONDS=90     # pause entre phases (laisse Chromium mourir)
 DISCORD_CHANNEL_NICHES=…
 DISCORD_CHANNEL_NICHES_DEMO=…
 DISCORD_CHANNEL_NICHES_VINTED=…
