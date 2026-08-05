@@ -1,7 +1,14 @@
-"""Client navigateur Playwright pour Vinted."""
+"""Client navigateur Playwright pour Vinted.
+
+Playwright sync_api utilise des greenlets incompatibles avec SQLAlchemy sync
+dans le même thread. Toutes les ops navigateur tournent donc dans un thread
+dédié ; le thread scrape peut faire de la DB sans MissingGreenlet.
+"""
 
 from __future__ import annotations
 
+import queue
+import threading
 from contextlib import contextmanager
 from typing import Any, Generator, Sequence
 from urllib.parse import urlencode
@@ -14,6 +21,7 @@ from vinted_bot.utils.rate_limit import RateLimiter
 log = get_logger(__name__)
 
 DEFAULT_BASE_URL = "https://www.vinted.fr"
+_CALL_TIMEOUT_S = 180.0
 
 
 def build_catalog_params(
@@ -33,7 +41,6 @@ def build_catalog_params(
         ("per_page", str(per_page)),
         ("order", order or "newest_first"),
     ]
-    # search_text optionnel si brand_ids seuls (toutes les nouveautés de la marque)
     if query and query.strip():
         params.insert(0, ("search_text", query.strip()))
     for brand_id in brand_ids or []:
@@ -41,9 +48,19 @@ def build_catalog_params(
     for catalog_id in catalog_ids or []:
         params.append(("catalog[]", str(catalog_id)))
     if price_from is not None:
-        params.append(("price_from", str(int(price_from) if float(price_from).is_integer() else price_from)))
+        params.append(
+            (
+                "price_from",
+                str(int(price_from) if float(price_from).is_integer() else price_from),
+            )
+        )
     if price_to is not None:
-        params.append(("price_to", str(int(price_to) if float(price_to).is_integer() else price_to)))
+        params.append(
+            (
+                "price_to",
+                str(int(price_to) if float(price_to).is_integer() else price_to),
+            )
+        )
     return params
 
 
@@ -64,8 +81,66 @@ class VintedBrowser:
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
+        self._cmd_q: queue.Queue[Any] = queue.Queue()
+        self._thread: threading.Thread | None = None
+
+    def _worker(self) -> None:
+        while True:
+            item = self._cmd_q.get()
+            if item is None:
+                break
+            name, args, kwargs, reply = item
+            try:
+                fn = getattr(self, name)
+                reply.put(("ok", fn(*args, **kwargs)))
+            except Exception as exc:  # noqa: BLE001
+                reply.put(("err", exc))
+
+    def _call(self, name: str, *args: Any, **kwargs: Any) -> Any:
+        if self._thread is not None and threading.current_thread() is self._thread:
+            return getattr(self, name)(*args, **kwargs)
+        if self._thread is None or not self._thread.is_alive():
+            raise RuntimeError("VintedBrowser non démarré — appeler start()")
+        reply: queue.Queue[Any] = queue.Queue(maxsize=1)
+        self._cmd_q.put((name, args, kwargs, reply))
+        try:
+            status, payload = reply.get(timeout=_CALL_TIMEOUT_S)
+        except queue.Empty as exc:
+            raise TimeoutError(f"Playwright timeout ({name})") from exc
+        if status == "err":
+            raise payload
+        return payload
 
     def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._thread = threading.Thread(
+            target=self._worker,
+            name="playwright-vinted",
+            daemon=True,
+        )
+        self._thread.start()
+        self._call("_start_impl")
+
+    def stop(self) -> None:
+        if self._thread is None:
+            return
+        try:
+            if self._thread.is_alive():
+                self._call("_stop_impl")
+        except Exception:  # noqa: BLE001
+            pass
+        self._cmd_q.put(None)
+        self._thread.join(timeout=30)
+        self._thread = None
+
+    def restart(self) -> None:
+        log.info("browser_restart")
+        self.stop()
+        self.start()
+        self.warm_up()
+
+    def _start_impl(self) -> None:
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(headless=self.headless)
         self._context = self._browser.new_context(
@@ -80,7 +155,7 @@ class VintedBrowser:
         self._page = self._context.new_page()
         self._page.set_default_timeout(self.timeout_ms)
 
-    def stop(self) -> None:
+    def _stop_impl(self) -> None:
         try:
             if self._context is not None:
                 self._context.close()
@@ -101,12 +176,6 @@ class VintedBrowser:
         self._browser = None
         self._playwright = None
 
-    def restart(self) -> None:
-        log.info("browser_restart")
-        self.stop()
-        self.start()
-        self.warm_up()
-
     @property
     def page(self) -> Page:
         if self._page is None:
@@ -114,7 +183,9 @@ class VintedBrowser:
         return self._page
 
     def warm_up(self) -> None:
-        """Ouvre la homepage pour obtenir cookies / session."""
+        self._call("_warm_up_impl")
+
+    def _warm_up_impl(self) -> None:
         self.rate_limiter.wait()
         log.info("browser_warmup", url=self.base_url)
         self.page.goto(self.base_url, wait_until="domcontentloaded")
@@ -149,10 +220,30 @@ class VintedBrowser:
         price_from: float | None = None,
         price_to: float | None = None,
     ) -> dict[str, Any]:
-        """
-        Récupère /api/v2/catalog/items.
-        Préfère un fetch API (rapide) ; fallback navigation page si besoin.
-        """
+        return self._call(
+            "_search_catalog_impl",
+            query,
+            page=page,
+            per_page=per_page,
+            order=order,
+            brand_ids=brand_ids,
+            catalog_ids=catalog_ids,
+            price_from=price_from,
+            price_to=price_to,
+        )
+
+    def _search_catalog_impl(
+        self,
+        query: str,
+        *,
+        page: int = 1,
+        per_page: int = 24,
+        order: str = "newest_first",
+        brand_ids: Sequence[int] | None = None,
+        catalog_ids: Sequence[int] | None = None,
+        price_from: float | None = None,
+        price_to: float | None = None,
+    ) -> dict[str, Any]:
         self.rate_limiter.wait()
         params = build_catalog_params(
             query,
@@ -179,7 +270,6 @@ class VintedBrowser:
         if payload is not None:
             return payload
 
-        # Fallback : navigation catalog (plus lent)
         search_url = f"{self.base_url}/catalog?{urlencode(params)}"
         log.warning("catalog_fetch_fallback_navigate", url=search_url)
         catalog_payload: dict[str, Any] | None = None
@@ -242,7 +332,6 @@ class VintedBrowser:
                 status=status,
                 body=body,
             )
-            # Anti-ban : backoff long sur rate-limit / soft block
             if status in {429, 403} or "rate_limit" in body.lower():
                 penalty = 45.0 if status == 429 else 90.0
                 self.rate_limiter.penalize(penalty)

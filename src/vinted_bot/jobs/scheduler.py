@@ -80,6 +80,11 @@ def run_scrape_loop(
             cycle += 1
             cycle_started = time.monotonic()
             try:
+                # DB avant / hors greenlet Playwright (évite MissingGreenlet)
+                filter_targets = active_filter_search_targets()
+                ran_filters = False
+                now = time.monotonic()
+
                 if browser is None:
                     browser = VintedBrowser(
                         base_url=settings.vinted_base_url,
@@ -90,9 +95,6 @@ def run_scrape_loop(
                     browser.warm_up()
                     cycles_on_browser = 0
 
-                filter_targets = active_filter_search_targets()
-                ran_filters = False
-                now = time.monotonic()
 
                 # 1) Toujours prioriser les filtres privés dès que l'intervalle est écoulé
                 if filter_targets and (now - last_filter_pulse) >= filter_interval:
