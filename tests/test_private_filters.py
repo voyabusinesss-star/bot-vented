@@ -10,10 +10,13 @@ from vinted_bot.services.private_filters import (
 
 
 def test_plan_limits() -> None:
-    assert plan_filter_limit("starter") == 5
-    assert plan_filter_limit("premium") == 20
-    assert plan_filter_limit("elite") is None
+    assert plan_filter_limit("starter") == 0
+    assert plan_filter_limit("premium") == 10
+    assert plan_filter_limit("elite") == 30
+    assert plan_filter_limit("pro") == 10
+    assert plan_filter_limit("proplus") == 30
     assert normalize_plan("PREMIUM") == "premium"
+    assert normalize_plan("Pro+") == "elite"
     assert set(PLAN_LIMITS) == {"starter", "premium", "elite"}
 
 
@@ -123,7 +126,9 @@ def test_private_alert_embed_is_dm_shaped() -> None:
     assert "03/07/2024" in embed["description"]
     assert "Nike" in embed["description"]
     assert "Filtre #1" in embed["footer"]["text"]
-    assert "90 €" in embed["description"]
+    assert "Valeur marché" not in embed["description"]
+    assert "Signal" not in embed["description"]
+    assert "90 €" not in embed["description"]
 
     from vinted_bot.services.private_filters import build_private_alert_payload
 

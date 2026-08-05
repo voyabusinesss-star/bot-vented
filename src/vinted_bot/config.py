@@ -6,7 +6,7 @@ import base64
 import re
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Clé marque normalisée (espaces) → champ Settings / env DISCORD_CHANNEL_*
@@ -152,6 +152,21 @@ class Settings(BaseSettings):
         "postgresql+psycopg://vinted:vinted@localhost:5432/vinted_bot"
     )
 
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def _normalize_database_url(cls, value: object) -> object:
+        """Railway injecte postgresql:// — SQLAlchemy a besoin de +psycopg."""
+        if not isinstance(value, str):
+            return value
+        url = value.strip()
+        if url.startswith("postgresql+psycopg://"):
+            return url
+        if url.startswith("postgres://"):
+            return "postgresql+psycopg://" + url[len("postgres://") :]
+        if url.startswith("postgresql://"):
+            return "postgresql+psycopg://" + url[len("postgresql://") :]
+        return url
+
     vinted_base_url: str = "https://www.vinted.fr"
     request_delay_seconds: float = 1.0
     max_retries: int = 3
@@ -222,8 +237,23 @@ class Settings(BaseSettings):
     discord_channel_mes_alertes: str = ""
     # Salon règlement — validation par bouton (post-reglement)
     discord_channel_reglement: str = ""
+    # Salon bienvenue — visible avant validation du règlement
+    discord_channel_bienvenue: str = ""
+    discord_channel_presentation: str = ""
+    discord_channel_annonces: str = ""
+    discord_channel_concours: str = ""
     # Rôle attribué après acceptation du règlement (ID Discord)
     discord_role_reglement_verified: str = ""
+    # Rôle Resello VIP (legacy / fallback si les rôles par tier ne sont pas définis)
+    discord_role_resello_vip: str = ""
+    # Rôles Discord par offre Whop (accès salons) — empilés : Pro = starter+pro, etc.
+    discord_role_sub_starter: str = ""
+    discord_role_sub_pro: str = ""
+    discord_role_sub_proplus: str = ""
+    # Catégorie réservée Pro / Pro+ (Starter : pas d'accès)
+    discord_category_private_tools: str = ""
+    # Message règlement existant (post-reglement --attach)
+    discord_reglement_message_id: str = ""
     # Salon alertes niches (fallback / combos)
     discord_channel_niches: str = ""
     # Salon demo / aperçu marketing détecteur (post-detector-apercu)
@@ -239,6 +269,36 @@ class Settings(BaseSettings):
     discord_webhook_vintify: str = ""
     vintify_site_url: str = "https://vintify.me/"
     vintify_preview_image_path: str = "config/vintify-preview.png"
+    # Salon abonnements (Starter / Pro / Pro+)
+    discord_channel_subscriptions: str = ""
+    discord_webhook_subscriptions: str = ""
+    subscriptions_images_path: str = "config/subscriptions"
+    subscriptions_checkout_url: str = ""
+    subscriptions_checkout_starter: str = ""
+    subscriptions_checkout_pro: str = ""
+    subscriptions_checkout_proplus: str = ""
+    # Salon guide fiscalité (post-fiscalite)
+    discord_channel_fiscalite: str = ""
+    discord_webhook_fiscalite: str = ""
+    fiscalite_guides_path: str = "config/guides"
+    # Salon panneau tickets recrutement
+    discord_channel_recruitment: str = ""
+    discord_webhook_recruitment: str = ""
+    # Catégorie où créer les salons privés recrutement-*
+    discord_category_recruitment_tickets: str = ""
+    # Rôle staff qui voit / gère les tickets (ex. Sous Responsable)
+    discord_role_recruitment_staff: str = ""
+    # Salon panneau tickets aide / support
+    discord_channel_support: str = ""
+    discord_webhook_support: str = ""
+    # Catégorie tickets aide (vide = même que recrutement)
+    discord_category_support_tickets: str = ""
+    # Rôle staff tickets aide (vide = même que recrutement)
+    discord_role_support_staff: str = ""
+    # Salon fournisseurs (Fleek)
+    discord_channel_fournisseurs: str = ""
+    discord_webhook_fournisseurs: str = ""
+    fleek_banner_path: str = "config/fleek-banner.png"
     # Fiches produit live (deep-dive ~1h → analyse niche)
     discord_channel_fiches_produit: str = ""
     # Durée deep-dive d'une niche avant publication fiche (secondes, défaut 1h)
@@ -260,20 +320,34 @@ class Settings(BaseSettings):
     discord_guild_id: str = ""
     # IDs Discord autorisés à /set-plan (séparés par des virgules). Vide = owner guild seulement via checks basiques.
     discord_filter_admin_ids: str = ""
-    # Alertes DM filtres privés : délai entre chaque envoi (ex. 60 = 1 min)
-    private_filter_dm_delay_seconds: float = Field(default=60.0, ge=0.0)
+    # Alertes DM filtres privés : délai court entre envois (worker async, anti 429)
+    private_filter_dm_delay_seconds: float = Field(default=0.4, ge=0.0)
     # Ne DM que les annonces publiées récemment (défaut 15 min)
     private_filter_max_age_seconds: float = Field(default=900.0, ge=30.0)
-    # Max DM privés par passage scrape
-    private_filter_max_dm_per_scrape: int = Field(default=3, ge=1, le=10)
+    # Max matches mis en file par passage scrape (le worker envoie ensuite)
+    private_filter_max_dm_per_scrape: int = Field(default=50, ge=1, le=200)
     # Intervalle dédié scrape filtres privés (secondes) — boucle continue
     private_filter_scrape_interval_seconds: float = Field(default=20.0, ge=10.0)
     # Portail liaison Vinted (URL publique HTTPS, ex. ngrok)
     vinted_link_public_url: str = ""
     vinted_link_server_host: str = "0.0.0.0"
     vinted_link_server_port: int = Field(default=8787, ge=1, le=65535)
+    # Whop — abonnements Nos offres (webhook + mapping produits)
+    whop_webhook_secret: str = ""
+    whop_api_key: str = ""
+    whop_product_starter: str = ""
+    whop_product_pro: str = ""
+    whop_product_proplus: str = ""
+    whop_webhook_host: str = "0.0.0.0"
+    whop_webhook_port: int = Field(default=8788, ge=1, le=65535)
+    # Railway injecte PORT — prioritaire pour exposer le webhook en HTTPS
+    port: int | None = Field(default=None, ge=1, le=65535)
     # Délai minimal entre posts Discord (évite 429 sans ralentir le scrape)
     discord_post_delay_seconds: float = Field(default=0.25, ge=0.0)
+    # Salon aperçu bot — flux public ralenti (sans boutons achat/négociation)
+    discord_channel_bot_preview: str = ""
+    # Intervalle mini entre 2 pings aperçu (secondes) — défaut ~2,5 min
+    bot_preview_interval_seconds: float = Field(default=150.0, ge=60.0)
 
     def brand_channel_map(self) -> dict[str, str]:
         """Marque suivie → channel id (seulement les IDs remplis)."""
@@ -304,6 +378,12 @@ class Settings(BaseSettings):
             and self.discord_channel_all.strip()
             and self.all_tracked_brands()
         )
+
+    def effective_whop_webhook_port(self) -> int:
+        """PORT (Railway) prioritaire, sinon WHOP_WEBHOOK_PORT (local)."""
+        if self.port is not None:
+            return int(self.port)
+        return int(self.whop_webhook_port or 8788)
 
 
 @lru_cache

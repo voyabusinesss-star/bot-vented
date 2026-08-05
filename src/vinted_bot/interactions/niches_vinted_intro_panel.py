@@ -151,24 +151,28 @@ def _save_catalog_host_meta(*, channel_id: str, message_id: str, url: str) -> No
 
 
 def _resolve_catalog_host_channel(intro_channel_id: str) -> str:
-    """Salon technique pour héberger le xlsx (jamais le détecteur ni l'intro public)."""
+    """Salon technique pour héberger le xlsx (jamais le détecteur / intro / mes-alertes)."""
     settings = get_settings()
     intro = sanitize_discord_channel_id(intro_channel_id)
     niches_detector = sanitize_discord_channel_id(
         getattr(settings, "discord_channel_niches", "") or ""
     )
+    mes_alertes = sanitize_discord_channel_id(
+        getattr(settings, "discord_channel_mes_alertes", "") or ""
+    )
+    blocked = {x for x in (intro, niches_detector, mes_alertes) if x}
     for raw in (
         getattr(settings, "discord_channel_catalog_host", ""),
         getattr(settings, "discord_channel_logs", ""),
-        getattr(settings, "discord_channel_mes_alertes", ""),
     ):
         host = sanitize_discord_channel_id(str(raw or ""))
-        if not host or host == intro or host == niches_detector:
+        if not host or host in blocked:
             continue
         return host
     raise ValueError(
-        "Configure DISCORD_CHANNEL_CATALOG_HOST (salon admin privé) "
-        "pour héberger le catalogue — pas le salon 🧠 Détecteur."
+        "Configure DISCORD_CHANNEL_CATALOG_HOST (salon admin privé, "
+        "ex. #logs) pour héberger le catalogue — "
+        "pas Mes alertes ni le salon Détecteur."
     )
 
 

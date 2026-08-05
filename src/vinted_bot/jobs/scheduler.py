@@ -30,6 +30,11 @@ def run_scrape_loop(
     - marques YAML intercalées **1 par 1** (ne bloque jamais la veille filtres)
     """
     settings = get_settings()
+    # Worker DM filtres privés (file async — ne bloque jamais le scrape)
+    from vinted_bot.services.private_alert_queue import ensure_private_alert_worker
+
+    ensure_private_alert_worker()
+
     cfg = load_searches_config()
     interval = (
         interval_seconds

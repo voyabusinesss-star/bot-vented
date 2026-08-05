@@ -36,3 +36,9 @@ data/
 .data/
 *.log
 downloads/
+
+# Large media (keep local only)
+*.mp4
+*.MOV
+*.mov
+Desktop/

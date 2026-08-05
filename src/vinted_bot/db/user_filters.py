@@ -9,17 +9,27 @@ from sqlalchemy.orm import Session
 
 from vinted_bot.db.models import DiscordMemberPlan, UserFilter, UserFilterAlert
 
+# Clés internes : starter / premium(=Pro) / elite(=Pro+)
 PLAN_LIMITS: dict[str, int | None] = {
-    "starter": 5,
-    "premium": 20,
-    "elite": None,  # illimité
+    "starter": 0,  # aucun filtre privé (offre marketing)
+    "premium": 10,  # Pro
+    "elite": 30,  # Pro+
 }
 
 VALID_PLANS = frozenset(PLAN_LIMITS)
 
+# Alias marketing / Discord → clés internes
+_PLAN_ALIASES: dict[str, str] = {
+    "pro": "premium",
+    "pro+": "elite",
+    "proplus": "elite",
+    "pro_plus": "elite",
+}
+
 
 def normalize_plan(plan: str | None) -> str:
-    p = (plan or "starter").strip().lower()
+    p = (plan or "starter").strip().lower().replace(" ", "")
+    p = _PLAN_ALIASES.get(p, p)
     return p if p in VALID_PLANS else "starter"
 
 
@@ -59,6 +69,8 @@ def set_member_plan(
     plan: str,
     *,
     discord_username: str | None = None,
+    subscription_active: bool | None = None,
+    whop_membership_id: str | None = None,
 ) -> DiscordMemberPlan:
     row = get_or_create_member_plan(
         session, discord_user_id, discord_username=discord_username
@@ -66,9 +78,21 @@ def set_member_plan(
     row.plan = normalize_plan(plan)
     if discord_username:
         row.discord_username = discord_username
+    if subscription_active is not None:
+        row.subscription_active = bool(subscription_active)
+    if whop_membership_id is not None:
+        row.whop_membership_id = (whop_membership_id or "").strip() or None
     session.flush()
     return row
 
+
+def deactivate_all_user_filters(session: Session, discord_user_id: int) -> int:
+    """Met en pause tous les filtres d'un membre (ex. fin d'abo Whop)."""
+    rows = list_user_filters(session, discord_user_id, active_only=True)
+    for row in rows:
+        row.is_active = False
+    session.flush()
+    return len(rows)
 
 def save_member_dm_dashboard(
     session: Session,

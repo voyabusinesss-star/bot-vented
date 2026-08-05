@@ -19,16 +19,152 @@ from vinted_bot.interactions.alerts_panel import (
     build_user_alerts_payload,
 )
 from vinted_bot.interactions.reglement_panel import REGLEMENT_ACCEPT
+from vinted_bot.interactions.recruitment_panel import (
+    RECRUIT_CLOSE,
+    RECRUIT_OPEN,
+    build_ticket_candidature_payload,
+    build_ticket_overwrites,
+    find_open_ticket_channel,
+    format_ticket_transcript,
+    parse_ticket_opener_id,
+    sanitize_ticket_channel_name,
+    ticket_topic_for_user,
+)
+from vinted_bot.interactions.support_panel import (
+    SUPPORT_CLOSE,
+    SUPPORT_OPEN,
+    build_support_ticket_payload,
+    find_open_support_ticket,
+    parse_ticket_opener_id as parse_support_opener_id,
+    sanitize_support_channel_name,
+    ticket_topic_for_user as support_ticket_topic_for_user,
+)
 from vinted_bot.interactions.discord_api import DiscordInteractionClient
 from vinted_bot.utils.logging import get_logger
 
 log = get_logger(__name__)
 
 
+def _member_role_ids(interaction: dict[str, Any]) -> set[str]:
+    member = interaction.get("member") or {}
+    return {str(r) for r in (member.get("roles") or [])}
+
+
+def _has_resello_vip(interaction: dict[str, Any]) -> bool:
+    """True si le membre a un rôle d'abonnement (starter/pro/pro+ ou VIP legacy)."""
+    from vinted_bot.services.whop_webhooks import all_subscription_role_ids
+
+    roles = _member_role_ids(interaction)
+    return any(rid in roles for rid in all_subscription_role_ids())
+
+
+def _plan_from_discord_roles(interaction: dict[str, Any]) -> str | None:
+    """Infère le plan depuis les rôles Discord (Pro+ > Pro > Starter)."""
+    from vinted_bot.config import get_settings
+
+    settings = get_settings()
+    roles = _member_role_ids(interaction)
+    proplus = (settings.discord_role_sub_proplus or "").strip()
+    pro = (settings.discord_role_sub_pro or "").strip()
+    starter = (settings.discord_role_sub_starter or "").strip()
+    vip = (settings.discord_role_resello_vip or "").strip()
+    # VIP legacy = même chose que Pro si pas de rôle Pro+ distinct
+    if proplus and proplus in roles:
+        return "elite"
+    if pro and pro in roles:
+        return "premium"
+    if vip and vip in roles:
+        # Même ID que Pro → Pro ; sinon abonné générique = Pro (10 filtres)
+        return "premium"
+    if starter and starter in roles:
+        return "starter"
+    return None
+
+
+def _align_db_plan_with_roles(
+    interaction: dict[str, Any],
+    discord_user_id: int,
+    *,
+    discord_username: str | None = None,
+) -> tuple[str, int | None, bool]:
+    """Retourne (plan, limit, subscription_active) et sync DB si le rôle Pro/Pro+ est là."""
+    from vinted_bot.db.user_filters import (
+        get_or_create_member_plan,
+        plan_filter_limit,
+        set_member_plan,
+    )
+
+    from_roles = _plan_from_discord_roles(interaction)
+    with session_scope() as session:
+        plan_row = get_or_create_member_plan(
+            session,
+            discord_user_id,
+            discord_username=discord_username,
+        )
+        db_plan = plan_row.plan
+        active = bool(getattr(plan_row, "subscription_active", False))
+        if from_roles and from_roles != "starter":
+            if db_plan != from_roles or not active:
+                plan_row = set_member_plan(
+                    session,
+                    discord_user_id,
+                    from_roles,
+                    discord_username=discord_username,
+                    subscription_active=True,
+                )
+                active = True
+            plan = from_roles
+        elif from_roles == "starter":
+            if not active:
+                plan_row = set_member_plan(
+                    session,
+                    discord_user_id,
+                    "starter",
+                    discord_username=discord_username,
+                    subscription_active=True,
+                )
+                active = True
+            plan = "starter"
+        else:
+            plan = db_plan
+        limit = plan_filter_limit(plan)
+    return plan, limit, active
+
+
+def _private_filters_gate_message(
+    *,
+    plan: str,
+    limit: int | None,
+    subscription_active: bool,
+    has_vip: bool,
+) -> str | None:
+    """None = OK pour créer un filtre ; sinon message d'erreur."""
+    from vinted_bot.db.user_filters import normalize_plan
+
+    plan_n = normalize_plan(plan)
+    # Abonnement Whop (rôle Pro / VIP ou flag DB) requis
+    if not subscription_active and not has_vip:
+        return (
+            "❌ Les filtres privés sont réservés aux abonnés Resello.\n"
+            "Prends un abonnement dans **Nos offres** (Whop)."
+        )
+    if limit is not None and limit <= 0:
+        return (
+            "❌ Ton abonnement **Starter** n'inclut pas les filtres privés.\n"
+            "Passe **Pro** (10) ou **Pro+** (30) dans Nos offres."
+        )
+    if plan_n == "starter" and (limit is None or limit <= 0):
+        return (
+            "❌ Ton abonnement **Starter** n'inclut pas les filtres privés.\n"
+            "Passe **Pro** ou **Pro+** dans Nos offres."
+        )
+    return None
+
+
 def _interaction_user(interaction: dict[str, Any]) -> dict[str, Any]:
     member = interaction.get("member") or {}
     user = member.get("user") or interaction.get("user") or {}
-    return user
+    return user if isinstance(user, dict) else {}
 
 
 def _discord_display_name(user: dict[str, Any]) -> str:
@@ -127,21 +263,34 @@ def _user_alerts_payload_for(
     discord_user_id: int,
     *,
     discord_username: str | None = None,
+    interaction: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from types import SimpleNamespace
 
-    from vinted_bot.db.user_filters import (
-        get_or_create_member_plan,
-        list_user_filters,
-        plan_filter_limit,
-    )
+    from vinted_bot.db.user_filters import list_user_filters
 
-    with session_scope() as session:
-        plan_row = get_or_create_member_plan(
-            session,
+    if interaction is not None:
+        plan, limit, _active = _align_db_plan_with_roles(
+            interaction,
             discord_user_id,
             discord_username=discord_username,
         )
+    else:
+        from vinted_bot.db.user_filters import (
+            get_or_create_member_plan,
+            plan_filter_limit,
+        )
+
+        with session_scope() as session:
+            plan_row = get_or_create_member_plan(
+                session,
+                discord_user_id,
+                discord_username=discord_username,
+            )
+            plan = plan_row.plan
+            limit = plan_filter_limit(plan)
+
+    with session_scope() as session:
         filters = list_user_filters(session, discord_user_id)
         snapshot = [
             SimpleNamespace(
@@ -157,8 +306,6 @@ def _user_alerts_payload_for(
             )
             for f in filters
         ]
-        plan = plan_row.plan
-        limit = plan_filter_limit(plan)
     return build_user_alerts_payload(plan=plan, filters=snapshot, limit=limit)
 
 
@@ -171,6 +318,7 @@ def handle_filtres_command(
     payload = _user_alerts_payload_for(
         discord_user_id,
         discord_username=_discord_display_name(user),
+        interaction=interaction,
     )
     client.respond_ephemeral_payload(
         interaction["id"],
@@ -207,26 +355,37 @@ def handle_filtre_creer_command(
         create_user_filter,
         filter_display_number,
         filter_has_criteria,
-        get_or_create_member_plan,
-        plan_filter_limit,
         summarize_filter,
     )
 
-    with session_scope() as session:
-        plan_row = get_or_create_member_plan(
-            session,
-            discord_user_id,
-            discord_username=_discord_display_name(user),
+    plan, limit, active = _align_db_plan_with_roles(
+        interaction,
+        discord_user_id,
+        discord_username=_discord_display_name(user),
+    )
+    gate = _private_filters_gate_message(
+        plan=plan,
+        limit=limit,
+        subscription_active=active,
+        has_vip=_has_resello_vip(interaction),
+    )
+    if gate:
+        client.respond_ephemeral(
+            interaction["id"],
+            interaction["token"],
+            gate,
         )
-        limit = plan_filter_limit(plan_row.plan)
+        return
+
+    with session_scope() as session:
         current = count_user_filters(session, discord_user_id)
         if limit is not None and current >= limit:
             client.respond_ephemeral(
                 interaction["id"],
                 interaction["token"],
                 (
-                    f"❌ Limite atteinte ({current}/{limit}) pour le plan `{plan_row.plan}`.\n"
-                    "Passe Premium/Elite ou `/filtre-supprimer` un filtre."
+                    f"❌ Limite atteinte ({current}/{limit}) pour le plan `{plan}`.\n"
+                    "Passe Pro/Pro+ ou `/filtre-supprimer` un filtre."
                 ),
             )
             return
@@ -348,21 +507,15 @@ def handle_filtre_plan_command(
 ) -> None:
     user = _interaction_user(interaction)
     discord_user_id = int(user["id"])
-    from vinted_bot.db.user_filters import (
-        count_user_filters,
-        get_or_create_member_plan,
-        plan_filter_limit,
-    )
+    from vinted_bot.db.user_filters import count_user_filters
 
+    plan, limit, active = _align_db_plan_with_roles(
+        interaction,
+        discord_user_id,
+        discord_username=_discord_display_name(user),
+    )
     with session_scope() as session:
-        plan_row = get_or_create_member_plan(
-            session,
-            discord_user_id,
-            discord_username=_discord_display_name(user),
-        )
         n = count_user_filters(session, discord_user_id)
-        plan = plan_row.plan
-        limit = plan_filter_limit(plan)
     limit_txt = "illimité" if limit is None else str(limit)
     client.respond_ephemeral(
         interaction["id"],
@@ -370,8 +523,9 @@ def handle_filtre_plan_command(
         (
             f"📦 **Ton plan filtres privés**\n"
             f"Plan : `{plan}`\n"
+            f"Abonnement actif : **{'oui' if active else 'non'}**\n"
             f"Filtres : **{n}** / **{limit_txt}**\n\n"
-            f"Starter=5 · Premium=20 · Elite=∞\n"
+            f"Starter=0 · Pro=10 · Pro+=30\n"
             f"_Les alertes partent en DM, jamais en salon public._"
         ),
     )
@@ -393,14 +547,40 @@ def handle_set_plan_command(
     opts = _option_map(interaction)
     target_id = int(opts.get("user") or 0)
     plan = str(opts.get("plan") or "starter")
-    from vinted_bot.db.user_filters import set_member_plan
+    from vinted_bot.db.user_filters import (
+        deactivate_all_user_filters,
+        normalize_plan,
+        plan_filter_limit,
+        set_member_plan,
+    )
+    from vinted_bot.services.whop_webhooks import sync_subscription_roles
 
+    plan_n = normalize_plan(plan)
     with session_scope() as session:
-        row = set_member_plan(session, target_id, plan)
+        row = set_member_plan(
+            session,
+            target_id,
+            plan_n,
+            subscription_active=True,
+        )
+        paused = 0
+        limit = plan_filter_limit(plan_n)
+        if limit is not None and limit <= 0:
+            paused = deactivate_all_user_filters(session, target_id)
+    try:
+        sync_subscription_roles(
+            discord_user_id=target_id,
+            plan=plan_n,
+            active=True,
+        )
+        vip_txt = f"rôles sync plan `{plan_n}`"
+    except Exception as exc:  # noqa: BLE001
+        vip_txt = f"rôles non sync ({str(exc)[:80]})"
+    extra = f" · {paused} filtre(s) en pause" if paused else ""
     client.respond_ephemeral(
         interaction["id"],
         interaction["token"],
-        f"✅ Plan de <@{target_id}> → `{row.plan}`",
+        f"✅ Plan de <@{target_id}> → `{row.plan}` ({vip_txt}){extra}",
     )
 
 
@@ -419,6 +599,26 @@ def handle_alert_create_button(
     client: DiscordInteractionClient,
     interaction: dict[str, Any],
 ) -> None:
+    user = _interaction_user(interaction)
+    discord_user_id = int(user["id"])
+    plan, limit, active = _align_db_plan_with_roles(
+        interaction,
+        discord_user_id,
+        discord_username=_discord_display_name(user),
+    )
+    gate = _private_filters_gate_message(
+        plan=plan,
+        limit=limit,
+        subscription_active=active,
+        has_vip=_has_resello_vip(interaction),
+    )
+    if gate:
+        client.respond_ephemeral(
+            interaction["id"],
+            interaction["token"],
+            gate,
+        )
+        return
     client.respond_modal(
         interaction["id"],
         interaction["token"],
@@ -510,6 +710,7 @@ def handle_alert_pause_select(
     payload = _user_alerts_payload_for(
         discord_user_id,
         discord_username=_discord_display_name(user),
+        interaction=interaction,
     )
     client.respond_update_message(
         interaction["id"],
@@ -553,6 +754,7 @@ def handle_alert_delete_select(
     payload = _user_alerts_payload_for(
         discord_user_id,
         discord_username=_discord_display_name(user),
+        interaction=interaction,
     )
     client.respond_update_message(
         interaction["id"],
@@ -646,25 +848,36 @@ def handle_alert_create_modal(
         create_user_filter,
         filter_display_number,
         filter_has_criteria,
-        get_or_create_member_plan,
-        plan_filter_limit,
         summarize_filter,
     )
 
-    with session_scope() as session:
-        plan_row = get_or_create_member_plan(
-            session,
-            discord_user_id,
-            discord_username=_discord_display_name(user),
+    plan, limit, active = _align_db_plan_with_roles(
+        interaction,
+        discord_user_id,
+        discord_username=_discord_display_name(user),
+    )
+    gate = _private_filters_gate_message(
+        plan=plan,
+        limit=limit,
+        subscription_active=active,
+        has_vip=_has_resello_vip(interaction),
+    )
+    if gate:
+        client.respond_ephemeral(
+            interaction["id"],
+            interaction["token"],
+            gate,
         )
-        limit = plan_filter_limit(plan_row.plan)
+        return
+
+    with session_scope() as session:
         current = count_user_filters(session, discord_user_id)
         if limit is not None and current >= limit:
             client.respond_ephemeral(
                 interaction["id"],
                 interaction["token"],
                 (
-                    f"❌ Limite atteinte ({current}/{limit}) pour le plan `{plan_row.plan}`.\n"
+                    f"❌ Limite atteinte ({current}/{limit}) pour le plan `{plan}`.\n"
                     "Supprime une alerte ou upgrade ton plan."
                 ),
             )
@@ -809,17 +1022,37 @@ def handle_alert_edit_modal(
     )
 
 
+def _reglement_reply(
+    client: DiscordInteractionClient,
+    interaction: dict[str, Any],
+    content: str,
+    *,
+    already_deferred: bool,
+) -> None:
+    if already_deferred:
+        client.edit_original(interaction["token"], content=content)
+    else:
+        client.respond_ephemeral(
+            interaction["id"],
+            interaction["token"],
+            content,
+        )
+
+
 def handle_reglement_accept(
     client: DiscordInteractionClient,
     interaction: dict[str, Any],
+    *,
+    already_deferred: bool = False,
 ) -> None:
     user = _interaction_user(interaction)
     user_id = int(user.get("id") or 0)
     if not user_id:
-        client.respond_ephemeral(
-            interaction["id"],
-            interaction["token"],
+        _reglement_reply(
+            client,
+            interaction,
             "Impossible d'identifier ton compte Discord.",
+            already_deferred=already_deferred,
         )
         return
 
@@ -829,12 +1062,17 @@ def handle_reglement_accept(
     role_id = client.reglement_verified_role_id()
 
     if role_id and role_id in member_roles:
-        client.respond_ephemeral(
-            interaction["id"],
-            interaction["token"],
+        _reglement_reply(
+            client,
+            interaction,
             "✅ Tu as déjà accepté le règlement — accès confirmé.",
+            already_deferred=already_deferred,
         )
         return
+
+    if not already_deferred:
+        client.defer_ephemeral(interaction["id"], interaction["token"])
+        already_deferred = True
 
     if role_id:
         try:
@@ -846,36 +1084,504 @@ def handle_reglement_accept(
                 role_id=role_id,
                 error=str(exc)[:200],
             )
-            client.respond_ephemeral(
-                interaction["id"],
-                interaction["token"],
+            _reglement_reply(
+                client,
+                interaction,
                 (
                     "❌ Impossible d'attribuer le rôle pour le moment.\n"
                     "Contacte un admin — le bot doit avoir **Gérer les rôles** "
                     "et le rôle doit être **sous** le rôle du bot."
                 ),
+                already_deferred=already_deferred,
             )
             return
-        client.respond_ephemeral(
-            interaction["id"],
-            interaction["token"],
+        _reglement_reply(
+            client,
+            interaction,
             (
                 "✅ **Règlement accepté** — bienvenue sur Resello !\n\n"
                 "Tu peux maintenant accéder aux salons du serveur."
             ),
+            already_deferred=already_deferred,
         )
         log.info("reglement_accepted", user_id=user_id, role_id=role_id)
         return
 
-    client.respond_ephemeral(
-        interaction["id"],
-        interaction["token"],
+    _reglement_reply(
+        client,
+        interaction,
         (
             "✅ **Règlement accepté** — merci d'avoir pris connaissance "
             "des règles du serveur."
         ),
+        already_deferred=already_deferred,
     )
     log.info("reglement_accepted_no_role", user_id=user_id)
+
+
+def _is_recruitment_staff(interaction: dict[str, Any], client: DiscordInteractionClient) -> bool:
+    user = _interaction_user(interaction)
+    user_id = int(user.get("id") or 0)
+    if user_id and _is_filter_admin(user_id):
+        return True
+    staff_role = client.recruitment_staff_role_id()
+    if not staff_role:
+        return False
+    member = interaction.get("member") or {}
+    roles = {str(r) for r in (member.get("roles") or [])}
+    return staff_role in roles
+
+
+def handle_recruit_open(
+    client: DiscordInteractionClient,
+    interaction: dict[str, Any],
+    *,
+    already_deferred: bool = False,
+) -> None:
+    from vinted_bot.config import discord_application_id
+    from vinted_bot.interactions.discord_api import sanitize_guild_id
+
+    user = _interaction_user(interaction)
+    user_id = str(user.get("id") or "").strip()
+    if not user_id:
+        if already_deferred:
+            client.edit_original(
+                interaction["token"],
+                content="Impossible d'identifier ton compte Discord.",
+            )
+        else:
+            client.respond_ephemeral(
+                interaction["id"],
+                interaction["token"],
+                "Impossible d'identifier ton compte Discord.",
+            )
+        return
+
+    guild_id = sanitize_guild_id(str(interaction.get("guild_id") or ""))
+    category_id = client.recruitment_category_id()
+    if not guild_id or not category_id:
+        msg = (
+            "❌ Recrutement non configuré.\n"
+            "Renseigne `DISCORD_CATEGORY_RECRUITMENT_TICKETS` dans `.env`."
+        )
+        if already_deferred:
+            client.edit_original(interaction["token"], content=msg)
+        else:
+            client.respond_ephemeral(
+                interaction["id"],
+                interaction["token"],
+                msg,
+            )
+        return
+
+    if not already_deferred:
+        client.defer_ephemeral(interaction["id"], interaction["token"])
+
+    try:
+        channels = client.list_guild_channels(guild_id)
+        existing = find_open_ticket_channel(
+            channels,
+            category_id=category_id,
+            user_id=user_id,
+        )
+        if existing:
+            cid = str(existing.get("id") or "")
+            client.edit_original(
+                interaction["token"],
+                content=(
+                    f"Tu as déjà un ticket ouvert : <#{cid}>\n"
+                    "Ferme-le avant d'en ouvrir un nouveau."
+                ),
+            )
+            return
+
+        username = str(user.get("username") or "membre")
+        channel_name = sanitize_ticket_channel_name(username)
+        bot_id = discord_application_id(
+            getattr(client.settings, "discord_bot_token", "") or ""
+        )
+        if not bot_id:
+            raise RuntimeError("Impossible de déterminer l'ID du bot")
+
+        staff_role = client.recruitment_staff_role_id()
+        overwrites = build_ticket_overwrites(
+            everyone_id=guild_id,
+            opener_user_id=user_id,
+            bot_user_id=bot_id,
+            staff_role_id=staff_role,
+        )
+        created = client.create_guild_channel(
+            guild_id,
+            name=channel_name,
+            parent_id=category_id,
+            topic=ticket_topic_for_user(user_id),
+            permission_overwrites=overwrites,
+        )
+        ticket_id = str(created.get("id") or "")
+        if not ticket_id:
+            raise RuntimeError("Salon ticket créé sans id")
+
+        staff_mention = f"<@&{staff_role}>" if staff_role else ""
+        payload = build_ticket_candidature_payload(
+            opener_mention=f"<@{user_id}>",
+            staff_mention=staff_mention,
+        )
+        content = staff_mention if staff_mention else None
+        post_body: dict[str, Any] = {
+            "embeds": payload["embeds"],
+            "components": payload["components"],
+        }
+        if content:
+            post_body["content"] = content
+        client.post_channel_payload(ticket_id, post_body)
+
+        client.edit_original(
+            interaction["token"],
+            content=(
+                f"✅ Ticket créé : <#{ticket_id}>\n"
+                "Réponds aux questions dans ce salon."
+            ),
+        )
+        log.info(
+            "recruit_ticket_opened",
+            user_id=user_id,
+            channel_id=ticket_id,
+            channel_name=channel_name,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("recruit_open_failed", user_id=user_id, error=str(exc)[:240])
+        client.edit_original(
+            interaction["token"],
+            content=(
+                "❌ Impossible de créer le ticket pour le moment.\n"
+                "Vérifie que le bot a **Gérer les salons** sur la catégorie "
+                "et que ses overwrites n'incluent que des perms qu'il possède."
+            ),
+        )
+
+
+def handle_recruit_close(
+    client: DiscordInteractionClient,
+    interaction: dict[str, Any],
+    *,
+    already_deferred: bool = False,
+) -> None:
+    user = _interaction_user(interaction)
+    user_id = str(user.get("id") or "").strip()
+    channel_id = str(interaction.get("channel_id") or "").strip()
+    if not user_id or not channel_id:
+        msg = "Impossible de fermer ce ticket."
+        if already_deferred:
+            client.edit_original(interaction["token"], content=msg)
+        else:
+            client.respond_ephemeral(
+                interaction["id"],
+                interaction["token"],
+                msg,
+            )
+        return
+
+    if not already_deferred:
+        client.defer_ephemeral(interaction["id"], interaction["token"])
+
+    try:
+        channel = client.get_channel(channel_id)
+        opener_id = parse_ticket_opener_id(channel.get("topic"))
+        is_opener = opener_id == user_id
+        is_staff = _is_recruitment_staff(interaction, client)
+        if not is_opener and not is_staff:
+            client.edit_original(
+                interaction["token"],
+                content="❌ Seul le candidat ou le staff peut fermer ce ticket.",
+            )
+            return
+
+        # Collect transcript (paginate)
+        collected: list[dict[str, Any]] = []
+        before: str | None = None
+        for _ in range(20):
+            batch = client.list_channel_messages(
+                channel_id, limit=100, before=before
+            )
+            if not batch:
+                break
+            collected.extend(batch)
+            before = str(batch[-1].get("id") or "") or None
+            if len(batch) < 100:
+                break
+
+        transcript = format_ticket_transcript(collected)
+        transcript_bytes = transcript.encode("utf-8")
+
+        dm_target = opener_id or user_id
+        try:
+            client.send_dm_payload(
+                dm_target,
+                {
+                    "content": (
+                        "Votre ticket a été fermé.\n"
+                        "Voici un transcript du ticket."
+                    ),
+                },
+                attachments=[("log.txt", transcript_bytes, "text/plain")],
+            )
+        except Exception as dm_exc:  # noqa: BLE001
+            log.warning(
+                "recruit_transcript_dm_failed",
+                user_id=dm_target,
+                error=str(dm_exc)[:200],
+            )
+
+        client.delete_channel(channel_id)
+        client.edit_original(
+            interaction["token"],
+            content="✅ Ticket fermé. Un transcript t'a été envoyé en message privé.",
+        )
+        log.info(
+            "recruit_ticket_closed",
+            closed_by=user_id,
+            opener_id=opener_id,
+            channel_id=channel_id,
+            messages=len(collected),
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "recruit_close_failed",
+            user_id=user_id,
+            channel_id=channel_id,
+            error=str(exc)[:240],
+        )
+        client.edit_original(
+            interaction["token"],
+            content=(
+                "❌ Impossible de fermer le ticket pour le moment.\n"
+                f"Détail : `{str(exc)[:120]}`"
+            ),
+        )
+
+
+def _is_support_staff(interaction: dict[str, Any], client: DiscordInteractionClient) -> bool:
+    user = _interaction_user(interaction)
+    user_id = int(user.get("id") or 0)
+    if user_id and _is_filter_admin(user_id):
+        return True
+    staff_role = client.support_staff_role_id()
+    if not staff_role:
+        return False
+    member = interaction.get("member") or {}
+    roles = {str(r) for r in (member.get("roles") or [])}
+    return staff_role in roles
+
+
+def handle_support_open(
+    client: DiscordInteractionClient,
+    interaction: dict[str, Any],
+    *,
+    already_deferred: bool = False,
+) -> None:
+    from vinted_bot.config import discord_application_id
+    from vinted_bot.interactions.discord_api import sanitize_guild_id
+
+    user = _interaction_user(interaction)
+    user_id = str(user.get("id") or "").strip()
+    if not user_id:
+        msg = "Impossible d'identifier ton compte Discord."
+        if already_deferred:
+            client.edit_original(interaction["token"], content=msg)
+        else:
+            client.respond_ephemeral(interaction["id"], interaction["token"], msg)
+        return
+
+    guild_id = sanitize_guild_id(str(interaction.get("guild_id") or ""))
+    category_id = client.support_category_id()
+    if not guild_id or not category_id:
+        msg = (
+            "❌ Support non configuré.\n"
+            "Renseigne `DISCORD_CATEGORY_RECRUITMENT_TICKETS` "
+            "(ou `DISCORD_CATEGORY_SUPPORT_TICKETS`) dans `.env`."
+        )
+        if already_deferred:
+            client.edit_original(interaction["token"], content=msg)
+        else:
+            client.respond_ephemeral(interaction["id"], interaction["token"], msg)
+        return
+
+    if not already_deferred:
+        client.defer_ephemeral(interaction["id"], interaction["token"])
+
+    try:
+        channels = client.list_guild_channels(guild_id)
+        existing = find_open_support_ticket(
+            channels,
+            category_id=category_id,
+            user_id=user_id,
+        )
+        if existing:
+            cid = str(existing.get("id") or "")
+            client.edit_original(
+                interaction["token"],
+                content=(
+                    f"Tu as déjà un ticket aide ouvert : <#{cid}>\n"
+                    "Ferme-le avant d'en ouvrir un nouveau."
+                ),
+            )
+            return
+
+        username = str(user.get("username") or "membre")
+        channel_name = sanitize_support_channel_name(username)
+        bot_id = discord_application_id(
+            getattr(client.settings, "discord_bot_token", "") or ""
+        )
+        if not bot_id:
+            raise RuntimeError("Impossible de déterminer l'ID du bot")
+
+        staff_role = client.support_staff_role_id()
+        overwrites = build_ticket_overwrites(
+            everyone_id=guild_id,
+            opener_user_id=user_id,
+            bot_user_id=bot_id,
+            staff_role_id=staff_role,
+        )
+        created = client.create_guild_channel(
+            guild_id,
+            name=channel_name,
+            parent_id=category_id,
+            topic=support_ticket_topic_for_user(user_id),
+            permission_overwrites=overwrites,
+        )
+        ticket_id = str(created.get("id") or "")
+        if not ticket_id:
+            raise RuntimeError("Salon ticket créé sans id")
+
+        staff_mention = f"<@&{staff_role}>" if staff_role else ""
+        payload = build_support_ticket_payload(
+            opener_mention=f"<@{user_id}>",
+            staff_mention=staff_mention,
+        )
+        post_body: dict[str, Any] = {
+            "embeds": payload["embeds"],
+            "components": payload["components"],
+        }
+        if staff_mention:
+            post_body["content"] = staff_mention
+        client.post_channel_payload(ticket_id, post_body)
+
+        client.edit_original(
+            interaction["token"],
+            content=(
+                f"✅ Ticket aide créé : <#{ticket_id}>\n"
+                "Décris ton problème dans ce salon."
+            ),
+        )
+        log.info(
+            "support_ticket_opened",
+            user_id=user_id,
+            channel_id=ticket_id,
+            channel_name=channel_name,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("support_open_failed", user_id=user_id, error=str(exc)[:240])
+        client.edit_original(
+            interaction["token"],
+            content=(
+                "❌ Impossible de créer le ticket pour le moment.\n"
+                "Vérifie que le bot a **Gérer les salons** sur la catégorie support."
+            ),
+        )
+
+
+def handle_support_close(
+    client: DiscordInteractionClient,
+    interaction: dict[str, Any],
+    *,
+    already_deferred: bool = False,
+) -> None:
+    user = _interaction_user(interaction)
+    user_id = str(user.get("id") or "").strip()
+    channel_id = str(interaction.get("channel_id") or "").strip()
+    if not user_id or not channel_id:
+        msg = "Impossible de fermer ce ticket."
+        if already_deferred:
+            client.edit_original(interaction["token"], content=msg)
+        else:
+            client.respond_ephemeral(interaction["id"], interaction["token"], msg)
+        return
+
+    if not already_deferred:
+        client.defer_ephemeral(interaction["id"], interaction["token"])
+
+    try:
+        channel = client.get_channel(channel_id)
+        opener_id = parse_support_opener_id(channel.get("topic"))
+        is_opener = opener_id == user_id
+        is_staff = _is_support_staff(interaction, client)
+        if not is_opener and not is_staff:
+            client.edit_original(
+                interaction["token"],
+                content="❌ Seul l'auteur du ticket ou le staff peut le fermer.",
+            )
+            return
+
+        collected: list[dict[str, Any]] = []
+        before: str | None = None
+        for _ in range(20):
+            batch = client.list_channel_messages(
+                channel_id, limit=100, before=before
+            )
+            if not batch:
+                break
+            collected.extend(batch)
+            before = str(batch[-1].get("id") or "") or None
+            if len(batch) < 100:
+                break
+
+        transcript = format_ticket_transcript(collected)
+        transcript_bytes = transcript.encode("utf-8")
+        dm_target = opener_id or user_id
+        try:
+            client.send_dm_payload(
+                dm_target,
+                {
+                    "content": (
+                        "Votre ticket aide a été fermé.\n"
+                        "Voici un transcript du ticket."
+                    ),
+                },
+                attachments=[("log.txt", transcript_bytes, "text/plain")],
+            )
+        except Exception as dm_exc:  # noqa: BLE001
+            log.warning(
+                "support_transcript_dm_failed",
+                user_id=dm_target,
+                error=str(dm_exc)[:200],
+            )
+
+        client.delete_channel(channel_id)
+        client.edit_original(
+            interaction["token"],
+            content="✅ Ticket fermé. Un transcript t'a été envoyé en message privé.",
+        )
+        log.info(
+            "support_ticket_closed",
+            closed_by=user_id,
+            opener_id=opener_id,
+            channel_id=channel_id,
+            messages=len(collected),
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "support_close_failed",
+            user_id=user_id,
+            channel_id=channel_id,
+            error=str(exc)[:240],
+        )
+        client.edit_original(
+            interaction["token"],
+            content=(
+                "❌ Impossible de fermer le ticket pour le moment.\n"
+                f"Détail : `{str(exc)[:120]}`"
+            ),
+        )
 
 
 def dispatch_interaction(
@@ -928,7 +1634,29 @@ def dispatch_interaction(
             handle_alert_dm_toggle(client, interaction)
             return
         if custom_id == REGLEMENT_ACCEPT:
-            handle_reglement_accept(client, interaction)
+            handle_reglement_accept(
+                client, interaction, already_deferred=already_deferred
+            )
+            return
+        if custom_id == RECRUIT_OPEN:
+            handle_recruit_open(
+                client, interaction, already_deferred=already_deferred
+            )
+            return
+        if custom_id == RECRUIT_CLOSE:
+            handle_recruit_close(
+                client, interaction, already_deferred=already_deferred
+            )
+            return
+        if custom_id == SUPPORT_OPEN:
+            handle_support_open(
+                client, interaction, already_deferred=already_deferred
+            )
+            return
+        if custom_id == SUPPORT_CLOSE:
+            handle_support_close(
+                client, interaction, already_deferred=already_deferred
+            )
             return
 
     if interaction_type == 5:

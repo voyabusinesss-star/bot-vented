@@ -344,11 +344,69 @@ def scrape_search_once(
         items_upserted=upserted,
         scrape_run_id=run_id,
         settings=settings,
+        # Aperçu géré juste après (public only) — pas via ce helper
+        bot_preview=False,
     )
     posted = len(posted_ids)
     if posted_ids:
         with session_scope() as session:
             mark_discord_posted(session, posted_ids)
+
+    # Salon aperçu bot : 1 ping ralenti depuis le scrape PUBLIC seulement
+    # (jamais les filtres privés / keep_search_text).
+    if not keep_search_text:
+        try:
+            from vinted_bot.notify.discord import (
+                DiscordNotifier,
+                maybe_post_bot_preview_from_candidates,
+            )
+
+            candidates: list[Any] = list(announce)
+            # Enrichit avec d'autres deals du scrape pour diversifier marques /
+            # textile vs chaussures (pas seulement adidas/jordan sneakers).
+            sample_ids = list(
+                dict.fromkeys([*created_vinted_ids, *all_vinted_ids])
+            )[:30]
+            if sample_ids:
+                with session_scope() as session:
+                    from sqlalchemy import select
+                    from sqlalchemy.orm import selectinload
+
+                    from vinted_bot.db.models import Listing as ListingModel
+
+                    rows = list(
+                        session.scalars(
+                            select(ListingModel)
+                            .options(selectinload(ListingModel.photos))
+                            .where(ListingModel.vinted_id.in_(sample_ids))
+                        )
+                        .unique()
+                        .all()
+                    )
+                    seen = {
+                        int(getattr(c, "vinted_id", 0) or 0) for c in candidates
+                    }
+                    for listing in rows:
+                        vid = int(listing.vinted_id or 0)
+                        if vid in seen:
+                            continue
+                        deal = evaluate_listing(listing, config=deal_cfg)
+                        if not deal.should_post:
+                            continue
+                        attach_deal_evaluation(listing, deal)
+                        for photo in list(listing.photos):
+                            session.expunge(photo)
+                        session.expunge(listing)
+                        candidates.append(listing)
+                        seen.add(vid)
+
+            if candidates:
+                with DiscordNotifier(settings) as notifier:
+                    maybe_post_bot_preview_from_candidates(
+                        notifier, candidates, settings=settings
+                    )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("bot_preview_hook_failed", error=str(exc)[:200])
 
     # Filtres privés → DM uniquement (indépendant des salons publics)
     # Cible filtre (keep_search_text) : toute la page newest + fraîcheur + dédup.

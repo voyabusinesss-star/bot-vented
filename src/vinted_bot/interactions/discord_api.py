@@ -145,9 +145,9 @@ class DiscordInteractionClient:
                         "type": 3,
                         "required": True,
                         "choices": [
-                            {"name": "Starter (5 filtres)", "value": "starter"},
-                            {"name": "Premium (20 filtres)", "value": "premium"},
-                            {"name": "Elite (illimité)", "value": "elite"},
+                            {"name": "Starter (0 filtre privé)", "value": "starter"},
+                            {"name": "Pro (10 filtres)", "value": "premium"},
+                            {"name": "Pro+ (30 filtres)", "value": "elite"},
                         ],
                     },
                 ],
@@ -316,6 +316,140 @@ class DiscordInteractionClient:
             raise RuntimeError(
                 f"Delete message {response.status_code}: {response.text[:400]}"
             )
+
+    def edit_channel_message(
+        self,
+        channel_id: str,
+        message_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not channel_id or not message_id:
+            raise ValueError("channel_id ou message_id manquant")
+        response = self._client.patch(
+            f"/channels/{channel_id}/messages/{message_id}",
+            json=payload,
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Edit message {response.status_code}: {response.text[:400]}"
+            )
+        return response.json()
+
+    def get_channel(self, channel_id: str) -> dict[str, Any]:
+        cid = str(channel_id or "").strip()
+        if not cid:
+            raise ValueError("channel_id manquant")
+        response = self._client.get(f"/channels/{cid}")
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Get channel {response.status_code}: {response.text[:400]}"
+            )
+        return response.json()
+
+    def list_guild_channels(self, guild_id: str) -> list[dict[str, Any]]:
+        gid = sanitize_guild_id(guild_id)
+        if not gid:
+            raise ValueError("guild_id manquant")
+        response = self._client.get(f"/guilds/{gid}/channels")
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"List channels {response.status_code}: {response.text[:400]}"
+            )
+        data = response.json()
+        return data if isinstance(data, list) else []
+
+    def create_guild_channel(
+        self,
+        guild_id: str,
+        *,
+        name: str,
+        parent_id: str | None = None,
+        topic: str | None = None,
+        permission_overwrites: list[dict[str, Any]] | None = None,
+        channel_type: int = 0,
+    ) -> dict[str, Any]:
+        gid = sanitize_guild_id(guild_id)
+        if not gid:
+            raise ValueError("guild_id manquant")
+        body: dict[str, Any] = {
+            "name": str(name).strip()[:100],
+            "type": int(channel_type),
+        }
+        if parent_id:
+            body["parent_id"] = str(parent_id)
+        if topic:
+            body["topic"] = str(topic)[:1024]
+        if permission_overwrites is not None:
+            body["permission_overwrites"] = permission_overwrites
+        response = self._client.post(f"/guilds/{gid}/channels", json=body)
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Create channel {response.status_code}: {response.text[:400]}"
+            )
+        return response.json()
+
+    def delete_channel(self, channel_id: str) -> None:
+        cid = str(channel_id or "").strip()
+        if not cid:
+            return
+        response = self._client.delete(f"/channels/{cid}")
+        if response.status_code >= 400 and response.status_code != 404:
+            raise RuntimeError(
+                f"Delete channel {response.status_code}: {response.text[:400]}"
+            )
+
+    def list_channel_messages(
+        self,
+        channel_id: str,
+        *,
+        limit: int = 100,
+        before: str | None = None,
+    ) -> list[dict[str, Any]]:
+        cid = str(channel_id or "").strip()
+        if not cid:
+            return []
+        params: dict[str, Any] = {"limit": max(1, min(int(limit), 100))}
+        if before:
+            params["before"] = str(before)
+        response = self._client.get(f"/channels/{cid}/messages", params=params)
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"List messages {response.status_code}: {response.text[:400]}"
+            )
+        data = response.json()
+        return data if isinstance(data, list) else []
+
+    def open_dm_channel(self, discord_user_id: int | str) -> str:
+        uid = str(discord_user_id or "").strip()
+        if not uid:
+            raise ValueError("discord_user_id manquant")
+        response = self._client.post(
+            "/users/@me/channels",
+            json={"recipient_id": uid},
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Open DM {response.status_code}: {response.text[:400]}"
+            )
+        channel_id = str(response.json().get("id") or "")
+        if not channel_id:
+            raise RuntimeError("Open DM: channel id manquant")
+        return channel_id
+
+    def send_dm_payload(
+        self,
+        discord_user_id: int | str,
+        payload: dict[str, Any],
+        *,
+        attachments: list[tuple[str, bytes, str]] | None = None,
+    ) -> dict[str, Any]:
+        channel_id = self.open_dm_channel(discord_user_id)
+        files = list(attachments or [])
+        if files:
+            return self.post_channel_payload_with_attachments(
+                channel_id, payload, attachments=files
+            )
+        return self.post_channel_payload(channel_id, payload)
 
     @staticmethod
     def _multipart_payload(
@@ -609,11 +743,13 @@ class DiscordInteractionClient:
                 webhook_body["components"] = body["components"]
             if logo_url:
                 webhook_body["avatar_url"] = logo_url
+            # Ne pas envoyer le logo en multipart si on a déjà l'URL CDN :
+            # le multipart httpx vide parfois embeds/components.
             return self._post_webhook_message(
                 wh_id,
                 wh_token,
                 webhook_body,
-                logo_bytes=logo_bytes if embeds else None,
+                logo_bytes=None if logo_url else (logo_bytes if embeds else None),
             )
 
         if logo_bytes and embeds:
@@ -659,7 +795,7 @@ class DiscordInteractionClient:
                 wh_id,
                 wh_token,
                 webhook_body,
-                logo_bytes=logo_bytes if embeds else None,
+                logo_bytes=None if logo_url else (logo_bytes if embeds else None),
             )
         finally:
             try:
@@ -679,6 +815,13 @@ class DiscordInteractionClient:
 
         return sanitize_discord_channel_id(
             getattr(self.settings, "discord_channel_reglement", "") or ""
+        )
+
+    def bienvenue_channel_id(self) -> str:
+        from vinted_bot.config import sanitize_discord_channel_id
+
+        return sanitize_discord_channel_id(
+            getattr(self.settings, "discord_channel_bienvenue", "") or ""
         )
 
     def reglement_verified_role_id(self) -> str:
@@ -706,6 +849,70 @@ class DiscordInteractionClient:
             raise RuntimeError(
                 f"Add role {response.status_code}: {response.text[:400]}"
             )
+
+    def remove_guild_member_role(
+        self,
+        guild_id: str,
+        user_id: int | str,
+        role_id: str,
+    ) -> None:
+        gid = sanitize_guild_id(guild_id)
+        rid = str(role_id or "").strip()
+        uid = str(user_id or "").strip()
+        if not gid or not rid or not uid:
+            raise ValueError("guild_id, user_id ou role_id manquant")
+        response = self._client.delete(
+            f"/guilds/{gid}/members/{uid}/roles/{rid}",
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Remove role {response.status_code}: {response.text[:400]}"
+            )
+
+    def edit_channel_permission(
+        self,
+        channel_id: str,
+        overwrite_id: str,
+        *,
+        allow: str | int = "0",
+        deny: str | int = "0",
+        overwrite_type: int = 0,
+    ) -> None:
+        """PUT /channels/{channel.id}/permissions/{overwrite.id} (type 0 = rôle)."""
+        cid = str(channel_id or "").strip()
+        oid = str(overwrite_id or "").strip()
+        if not cid or not oid:
+            raise ValueError("channel_id ou overwrite_id manquant")
+        response = self._client.put(
+            f"/channels/{cid}/permissions/{oid}",
+            json={
+                "type": int(overwrite_type),
+                "allow": str(allow),
+                "deny": str(deny),
+            },
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Edit permission {response.status_code}: {response.text[:400]}"
+            )
+
+    def delete_channel_permission(self, channel_id: str, overwrite_id: str) -> None:
+        cid = str(channel_id or "").strip()
+        oid = str(overwrite_id or "").strip()
+        if not cid or not oid:
+            return
+        response = self._client.delete(f"/channels/{cid}/permissions/{oid}")
+        if response.status_code >= 400 and response.status_code != 404:
+            raise RuntimeError(
+                f"Delete permission {response.status_code}: {response.text[:400]}"
+            )
+
+    def resello_vip_role_id(self) -> str:
+        from vinted_bot.config import sanitize_discord_channel_id
+
+        return sanitize_discord_channel_id(
+            getattr(self.settings, "discord_role_resello_vip", "") or ""
+        )
 
     def niches_channel_id(self) -> str:
         from vinted_bot.config import sanitize_discord_channel_id
@@ -740,6 +947,69 @@ class DiscordInteractionClient:
 
         return sanitize_discord_channel_id(
             getattr(self.settings, "discord_channel_vintify", "") or ""
+        )
+
+    def subscriptions_channel_id(self) -> str:
+        from vinted_bot.config import sanitize_discord_channel_id
+
+        return sanitize_discord_channel_id(
+            getattr(self.settings, "discord_channel_subscriptions", "") or ""
+        )
+
+    def fiscalite_channel_id(self) -> str:
+        from vinted_bot.config import sanitize_discord_channel_id
+
+        return sanitize_discord_channel_id(
+            getattr(self.settings, "discord_channel_fiscalite", "") or ""
+        )
+
+    def recruitment_channel_id(self) -> str:
+        from vinted_bot.config import sanitize_discord_channel_id
+
+        return sanitize_discord_channel_id(
+            getattr(self.settings, "discord_channel_recruitment", "") or ""
+        )
+
+    def recruitment_category_id(self) -> str:
+        from vinted_bot.config import sanitize_discord_channel_id
+
+        return sanitize_discord_channel_id(
+            getattr(self.settings, "discord_category_recruitment_tickets", "") or ""
+        )
+
+    def recruitment_staff_role_id(self) -> str:
+        from vinted_bot.config import sanitize_discord_channel_id
+
+        return sanitize_discord_channel_id(
+            getattr(self.settings, "discord_role_recruitment_staff", "") or ""
+        )
+
+    def support_channel_id(self) -> str:
+        from vinted_bot.config import sanitize_discord_channel_id
+
+        return sanitize_discord_channel_id(
+            getattr(self.settings, "discord_channel_support", "") or ""
+        )
+
+    def support_category_id(self) -> str:
+        from vinted_bot.config import sanitize_discord_channel_id
+
+        raw = getattr(self.settings, "discord_category_support_tickets", "") or ""
+        cid = sanitize_discord_channel_id(raw)
+        return cid or self.recruitment_category_id()
+
+    def support_staff_role_id(self) -> str:
+        from vinted_bot.config import sanitize_discord_channel_id
+
+        raw = getattr(self.settings, "discord_role_support_staff", "") or ""
+        rid = sanitize_discord_channel_id(raw)
+        return rid or self.recruitment_staff_role_id()
+
+    def fournisseurs_channel_id(self) -> str:
+        from vinted_bot.config import sanitize_discord_channel_id
+
+        return sanitize_discord_channel_id(
+            getattr(self.settings, "discord_channel_fournisseurs", "") or ""
         )
 
     def vinted_links_channel_id(self) -> str:

@@ -434,6 +434,152 @@ def _build_listing_components(listing: Listing) -> list[dict[str, Any]]:
     ]
 
 
+def build_listing_preview_payload(listing: Listing) -> dict[str, Any]:
+    """Même annonce riche que les salons publics (détails / acheter / négocier)."""
+    return build_listing_payload(listing)
+
+
+_last_bot_preview_post_at: float = 0.0
+_recent_preview_brands: list[str] = []
+_recent_preview_vinted_ids: list[int] = []
+_RECENT_PREVIEW_BRANDS_MAX = 8
+_RECENT_PREVIEW_IDS_MAX = 40
+
+
+def _preview_brand_key(listing: Listing) -> str:
+    return normalize_brand(listing.brand) or "unknown"
+
+
+def _preview_is_shoe(listing: Listing) -> bool:
+    from vinted_bot.services.deal_filter import is_shoe_listing
+
+    deal = get_deal_evaluation(listing)
+    category = getattr(deal, "category", None) if deal is not None else None
+    if category in ("chaussure", "dunk", "air_force_1"):
+        return True
+    return is_shoe_listing(listing.title or "")
+
+
+def pick_diverse_preview_listing(candidates: list[Listing]) -> Listing | None:
+    """Évite de spammer la même marque / que des chaussures dans l'aperçu."""
+    if not candidates:
+        return None
+
+    fresh = [
+        c
+        for c in candidates
+        if int(getattr(c, "vinted_id", 0) or 0) not in set(_recent_preview_vinted_ids)
+    ]
+    pool = fresh or list(candidates)
+
+    recent_tags = set(_recent_preview_brands)
+    recent_brand_names = {
+        tag.split(":", 1)[-1] for tag in _recent_preview_brands if ":" in tag
+    }
+    recent_shoes = sum(1 for b in _recent_preview_brands[-4:] if b.startswith("shoe:"))
+
+    def _score(item: Listing) -> tuple[int, int, int]:
+        deal = get_deal_evaluation(item)
+        deal_score = int(getattr(deal, "score", 0) or 0)
+        brand = _preview_brand_key(item)
+        is_shoe = _preview_is_shoe(item)
+        brand_tag = f"{'shoe' if is_shoe else 'cloth'}:{brand}"
+        # Pénalise marque déjà vue (chaussure ou textile)
+        if brand_tag in recent_tags or brand in recent_brand_names:
+            diversity = 0
+        else:
+            diversity = 50
+        # Après plusieurs sneakers, pousse le textile
+        if is_shoe and recent_shoes >= 2:
+            shoe_bias = -40
+        elif not is_shoe:
+            shoe_bias = 20
+        else:
+            shoe_bias = 0
+        return (
+            diversity + shoe_bias,
+            deal_score,
+            int(getattr(item, "vinted_id", 0) or 0),
+        )
+
+    return max(pool, key=_score)
+
+
+def maybe_post_bot_preview(
+    notifier: "DiscordNotifier",
+    listing: Listing,
+    *,
+    settings: Settings | None = None,
+) -> bool:
+    """Poste au plus 1 aperçu toutes les N secondes dans le salon dédié."""
+    return maybe_post_bot_preview_from_candidates(
+        notifier, [listing], settings=settings
+    )
+
+
+def maybe_post_bot_preview_from_candidates(
+    notifier: "DiscordNotifier",
+    candidates: list[Listing],
+    *,
+    settings: Settings | None = None,
+) -> bool:
+    """Choisit une annonce diversifiée puis poste (avec boutons)."""
+    global _last_bot_preview_post_at, _recent_preview_brands, _recent_preview_vinted_ids
+
+    cfg = settings or notifier.settings
+    channel_id = sanitize_discord_channel_id(
+        getattr(cfg, "discord_channel_bot_preview", "") or ""
+    )
+    if not channel_id:
+        log.info("discord_bot_preview_skipped", reason="channel_not_configured")
+        return False
+
+    interval = float(getattr(cfg, "bot_preview_interval_seconds", 150.0) or 150.0)
+    now = time.monotonic()
+    if _last_bot_preview_post_at and (now - _last_bot_preview_post_at) < interval:
+        log.info(
+            "discord_bot_preview_skipped",
+            reason="interval",
+            wait_seconds=round(interval - (now - _last_bot_preview_post_at), 1),
+            candidates=len(candidates),
+        )
+        return False
+
+    listing = pick_diverse_preview_listing(candidates)
+    if listing is None:
+        log.info("discord_bot_preview_skipped", reason="no_candidate")
+        return False
+
+    try:
+        notifier.post_message(channel_id, build_listing_preview_payload(listing))
+        _last_bot_preview_post_at = now
+        brand = _preview_brand_key(listing)
+        tag = f"{'shoe' if _preview_is_shoe(listing) else 'cloth'}:{brand}"
+        _recent_preview_brands = (_recent_preview_brands + [tag])[
+            -_RECENT_PREVIEW_BRANDS_MAX:
+        ]
+        vid = int(getattr(listing, "vinted_id", 0) or 0)
+        if vid:
+            _recent_preview_vinted_ids = (_recent_preview_vinted_ids + [vid])[
+                -_RECENT_PREVIEW_IDS_MAX:
+            ]
+        log.info(
+            "discord_bot_preview_posted",
+            vinted_id=listing.vinted_id,
+            channel_id=channel_id,
+            brand=listing.brand,
+            kind=tag,
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "discord_bot_preview_failed",
+            vinted_id=listing.vinted_id,
+            error=str(exc)[:200],
+        )
+        return False
+
+
 def _listing_fields(listing: Listing, deal: Any | None = None) -> list[dict[str, Any]]:
     """Grille : infos à gauche, avis deal à droite."""
     return [
@@ -804,17 +950,30 @@ def publish_listings_to_discord(
     items_upserted: int,
     scrape_run_id: int,
     settings: Settings | None = None,
+    bot_preview: bool = False,
 ) -> list[int]:
-    """Poste les annonces. Retourne les listing.id postés avec succès."""
+    """Poste les annonces. Retourne les listing.id postés avec succès.
+
+    bot_preview=True : tente aussi 1 ping ralenti dans le salon aperçu
+    (scrapes publics uniquement — jamais les filtres privés).
+    """
     cfg = settings or get_settings()
-    if not cfg.discord_ready():
-        log.info("discord_skipped", reason="not_configured")
-        return []
+    if not cfg.discord_ready() and not (
+        bot_preview
+        and sanitize_discord_channel_id(
+            getattr(cfg, "discord_channel_bot_preview", "") or ""
+        )
+    ):
+        if not cfg.discord_ready():
+            log.info("discord_skipped", reason="not_configured")
+            return []
 
     posted_ids: list[int] = []
     with DiscordNotifier(cfg) as notifier:
         total = len(listings)
         for index, listing in enumerate(listings):
+            if not cfg.discord_ready():
+                break
             try:
                 channel_id = notifier.post_listing(listing)
                 if channel_id:
@@ -835,15 +994,22 @@ def publish_listings_to_discord(
             if index < total - 1 and cfg.discord_post_delay_seconds > 0:
                 time.sleep(cfg.discord_post_delay_seconds)
 
-        try:
-            notifier.post_summary(
-                query=query,
-                items_found=items_found,
-                items_upserted=items_upserted,
-                items_posted=len(posted_ids),
-                scrape_run_id=scrape_run_id,
+        # Aperçu : basé sur les annonces du scrape public (pas besoin du post marque)
+        if bot_preview and listings:
+            maybe_post_bot_preview_from_candidates(
+                notifier, list(listings), settings=cfg
             )
-        except Exception as exc:
-            log.exception("discord_summary_failed", error=str(exc))
+
+        if cfg.discord_ready():
+            try:
+                notifier.post_summary(
+                    query=query,
+                    items_found=items_found,
+                    items_upserted=items_upserted,
+                    items_posted=len(posted_ids),
+                    scrape_run_id=scrape_run_id,
+                )
+            except Exception as exc:
+                log.exception("discord_summary_failed", error=str(exc))
 
     return posted_ids

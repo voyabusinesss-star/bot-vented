@@ -225,18 +225,13 @@ def build_private_alert_embed(match: PrivateMatch) -> dict[str, Any]:
         if listing.price_cents is not None
         else "—"
     )
-    market = (
-        f"{match.market_eur:.0f} €" if match.market_eur is not None else "—"
-    )
     title = (listing.title or "Annonce Vinted")[:256]
     url = (listing.url or "").strip()
     brand = getattr(listing, "brand", None) or "—"
     description = (
         f"{_published_display(listing)}\n\n"
         f"💰 **Prix :** {price}\n"
-        f"🔖 **Marque :** {brand}\n"
-        f"📈 **Valeur marché :** {market}\n"
-        f"🔥 **Signal :** {match.signal}"
+        f"🔖 **Marque :** {brand}"
     )
     embed: dict[str, Any] = {
         "title": title,
@@ -446,8 +441,15 @@ def find_private_matches(listings: Sequence[Listing]) -> list[PrivateMatch]:
 
 
 def send_private_filter_alerts(listings: Sequence[Listing]) -> int:
-    """Évalue les nouvelles annonces et envoie les DM privés. Retourne # DM envoyés."""
-    import time
+    """Match les annonces et **enqueue** les DM (non bloquant pour le scrape).
+
+    Retourne le nombre d'alertes mises en file (pas forcément déjà envoyées).
+    """
+    from vinted_bot.services.private_alert_queue import (
+        QueuedPrivateAlert,
+        ensure_private_alert_worker,
+        enqueue_private_alert,
+    )
 
     settings = get_settings()
     if not settings.discord_bot_token.strip():
@@ -456,64 +458,43 @@ def send_private_filter_alerts(listings: Sequence[Listing]) -> int:
     if not matches:
         return 0
 
-    # Plus récentes d'abord
     def _sort_key(m: PrivateMatch) -> float:
         age = _listing_age_seconds(m.listing)
         return age if age is not None else 0.0
 
     matches.sort(key=_sort_key)
-    max_dm = int(getattr(settings, "private_filter_max_dm_per_scrape", 3) or 3)
+    # Plus de hard-cap agressif : la file + worker gèrent le débit.
+    # Garde-fou anti-explosion si un scrape ramène trop de matches d'un coup.
+    max_dm = int(getattr(settings, "private_filter_max_dm_per_scrape", 50) or 50)
     matches = matches[: max(1, max_dm)]
-    delay = float(getattr(settings, "private_filter_dm_delay_seconds", 60.0) or 0.0)
 
-    from vinted_bot.notify.discord import DiscordNotifier
-
-    sent = 0
-    with DiscordNotifier(settings) as notifier:
-        for idx, match in enumerate(matches):
-            if idx > 0 and delay > 0:
-                log.info(
-                    "private_filter_dm_delay",
-                    seconds=delay,
-                    next_vinted_id=match.listing.vinted_id,
-                )
-                time.sleep(delay)
-            payload = build_private_alert_payload(match)
-            title = (match.listing.title or "Annonce")[:80]
-            try:
-                notifier.send_dm_payload(
-                    match.discord_user_id,
-                    {
-                        **payload,
-                        "content": f"🔔 [{title}]({match.listing.url})"
-                        if match.listing.url
-                        else f"🔔 **{title}**",
-                    },
-                )
-            except Exception as exc:  # noqa: BLE001
-                log.warning(
-                    "private_filter_dm_failed",
-                    discord_user_id=match.discord_user_id,
-                    filter_id=match.filter_id,
-                    vinted_id=match.listing.vinted_id,
-                    error=str(exc)[:160],
-                )
-                continue
-            with session_scope() as session:
-                record_filter_alert(
-                    session,
-                    filter_id=match.filter_id,
-                    discord_user_id=match.discord_user_id,
-                    vinted_id=int(match.listing.vinted_id),
-                )
-            sent += 1
+    ensure_private_alert_worker()
+    queued = 0
+    for match in matches:
+        listing = match.listing
+        payload = build_private_alert_payload(match)
+        # Retirer content éventuel — le worker le pose
+        payload.pop("content", None)
+        ok = enqueue_private_alert(
+            QueuedPrivateAlert(
+                discord_user_id=int(match.discord_user_id),
+                filter_id=int(match.filter_id),
+                vinted_id=int(listing.vinted_id),
+                listing_id=int(getattr(listing, "id", 0) or 0),
+                title=str(listing.title or "Annonce"),
+                url=str(listing.url or ""),
+                payload=payload,
+            )
+        )
+        if ok:
+            queued += 1
             log.info(
-                "private_filter_dm_sent",
+                "private_filter_dm_queued",
                 discord_user_id=match.discord_user_id,
                 filter_id=match.filter_id,
-                vinted_id=match.listing.vinted_id,
+                vinted_id=listing.vinted_id,
             )
-    return sent
+    return queued
 
 
 def _filter_display_title(row: UserFilter) -> str:

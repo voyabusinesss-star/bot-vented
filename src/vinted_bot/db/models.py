@@ -374,6 +374,9 @@ class DiscordMemberPlan(Base):
     discord_user_id: Mapped[int] = mapped_column(BigInteger, index=True)
     discord_username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     plan: Mapped[str] = mapped_column(String(32), default="starter")  # starter|premium|elite
+    # True uniquement après achat Whop (ou /set-plan admin) — pas le défaut « free »
+    subscription_active: Mapped[bool] = mapped_column(default=False, server_default="false")
+    whop_membership_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     dm_channel_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     dm_dashboard_message_id: Mapped[Optional[str]] = mapped_column(
         String(32), nullable=True

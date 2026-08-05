@@ -100,8 +100,33 @@ def _defer_interaction_immediately(
     client: DiscordInteractionClient,
     interaction: dict[str, Any],
 ) -> bool:
-    """Les interactions restantes répondent sans opération longue préalable."""
-    return False
+    """Ack Discord <3s pour les handlers qui font des appels API longs."""
+    from vinted_bot.interactions.recruitment_panel import RECRUIT_CLOSE, RECRUIT_OPEN
+    from vinted_bot.interactions.reglement_panel import REGLEMENT_ACCEPT
+    from vinted_bot.interactions.support_panel import SUPPORT_CLOSE, SUPPORT_OPEN
+
+    interaction_type = interaction.get("type")
+    if interaction_type != 3:
+        return False
+    custom_id = str((interaction.get("data") or {}).get("custom_id") or "")
+    if custom_id not in {
+        RECRUIT_OPEN,
+        RECRUIT_CLOSE,
+        SUPPORT_OPEN,
+        SUPPORT_CLOSE,
+        REGLEMENT_ACCEPT,
+    }:
+        return False
+    try:
+        client.defer_ephemeral(interaction["id"], interaction["token"])
+        return True
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "interaction_immediate_defer_failed",
+            custom_id=custom_id,
+            error=str(exc)[:200],
+        )
+        return False
 
 
 def _interaction_failure_response(
@@ -151,8 +176,15 @@ async def _dispatch_interaction_safe(
 
 def run_discord_interactions() -> None:
     """Point d'entrée sync (CLI)."""
+    from vinted_bot.services.whop_webhooks import start_whop_webhook_server
+
     log.info("discord_interactions_start")
+    whop_server = start_whop_webhook_server()
     try:
         asyncio.run(run_discord_gateway())
     except KeyboardInterrupt:
         log.info("discord_interactions_stopped")
+    finally:
+        if whop_server is not None:
+            whop_server.shutdown()
+            log.info("whop_webhook_server_stopped")

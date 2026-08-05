@@ -61,6 +61,14 @@ uv run pytest
 Les recherches se configurent dans [`config/searches.yaml`](config/searches.yaml) (query + marque + filtres optionnels), les IDs Discord restent dans `.env`.
 Mode 24/7 : `scrape --loop` (intervalle / restart navigateur dans le YAML).
 
+## Railway — webhook Whop (URL fixe)
+
+Pour attribuer les rôles Discord après paiement **sans tunnel local** :
+
+→ Guide : [`docs/RAILWAY_WHOP.md`](docs/RAILWAY_WHOP.md)
+
+Résumé : nouveau service Railway (`Dockerfile` + `railway.toml`) → Postgres → domaine HTTPS → URL Whop = `https://<service>.up.railway.app/webhooks/whop`.
+
 ## Filtrage deal (revente)
 
 Config unique : [`config/deal_filters.yaml`](config/deal_filters.yaml).
