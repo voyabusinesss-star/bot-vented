@@ -208,12 +208,13 @@ def all_subscription_role_ids(settings: Settings | None = None) -> list[str]:
 
 
 def roles_for_plan(plan: str, settings: Settings | None = None) -> list[str]:
-    """Rôles à attribuer pour un plan (empilés : Pro ⊂ Pro+).
+    """Rôles à attribuer pour un plan — exclusifs (1 abo = 1 rôle).
 
     Starter → [starter]
-    Pro (premium) → [starter, pro]
-    Pro+ (elite) → [starter, pro, proplus]
+    Pro (premium) → [pro]
+    Pro+ (elite) → [proplus]
 
+    Un changement d'abo remplace l'ancien rôle (pas d'empilement).
     Si aucun rôle tier n'est configuré, fallback sur DISCORD_ROLE_RESELLO_VIP.
     """
     from vinted_bot.db.user_filters import normalize_plan
@@ -221,20 +222,15 @@ def roles_for_plan(plan: str, settings: Settings | None = None) -> list[str]:
     s = settings or get_settings()
     plan_n = normalize_plan(plan)
     roles_map = subscription_role_ids(s)
-    stack: list[str] = []
-    if plan_n in {"starter", "premium", "elite"} and roles_map["starter"]:
-        stack.append(roles_map["starter"])
-    if plan_n in {"premium", "elite"} and roles_map["premium"]:
-        stack.append(roles_map["premium"])
-    if plan_n == "elite" and roles_map["elite"]:
-        stack.append(roles_map["elite"])
-    # Dédup en gardant l'ordre
-    out: list[str] = []
-    for rid in stack:
-        if rid and rid not in out:
-            out.append(rid)
-    if out:
-        return out
+    rid = ""
+    if plan_n == "starter":
+        rid = roles_map["starter"]
+    elif plan_n == "premium":
+        rid = roles_map["premium"]
+    elif plan_n == "elite":
+        rid = roles_map["elite"]
+    if rid:
+        return [rid]
     vip = (s.discord_role_resello_vip or "").strip()
     return [vip] if vip else []
 
@@ -442,20 +438,41 @@ def handle_whop_event(
         return "activated"
 
     if event_type in _DEACTIVATE_EVENTS:
-        if discord_user_id is None and membership_id:
-            # Lookup DB by membership id
-            from vinted_bot.db.models import DiscordMemberPlan
-            from vinted_bot.db.session import session_scope
-            from sqlalchemy import select
+        from vinted_bot.db.models import DiscordMemberPlan
+        from vinted_bot.db.session import session_scope
+        from sqlalchemy import select
 
-            with session_scope() as session:
+        row = None
+        with session_scope() as session:
+            if membership_id:
                 row = session.scalar(
                     select(DiscordMemberPlan).where(
                         DiscordMemberPlan.whop_membership_id == membership_id
                     )
                 )
-                if row is not None:
-                    discord_user_id = int(row.discord_user_id)
+            if row is None and discord_user_id is not None:
+                row = session.scalar(
+                    select(DiscordMemberPlan).where(
+                        DiscordMemberPlan.discord_user_id == int(discord_user_id)
+                    )
+                )
+            if row is not None:
+                discord_user_id = int(row.discord_user_id)
+                current_mem = (row.whop_membership_id or "").strip() or None
+                # Upgrade Pro → Pro+ : l'ancien membership se coupe mais
+                # le membre a déjà un nouvel abo — ne pas tout retirer.
+                if (
+                    membership_id
+                    and current_mem
+                    and current_mem != membership_id
+                ):
+                    log.info(
+                        "whop_deactivate_skip_stale_membership",
+                        membership_id=membership_id,
+                        current_membership_id=current_mem,
+                        discord_user_id=discord_user_id,
+                    )
+                    return "deactivate_skip_stale"
         if discord_user_id is None:
             log.warning(
                 "whop_deactivate_no_discord",

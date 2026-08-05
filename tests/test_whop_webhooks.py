@@ -195,7 +195,7 @@ def test_handle_pending_discord(monkeypatch) -> None:
     assert status == "pending_discord"
 
 
-def test_roles_for_plan_stacked() -> None:
+def test_roles_for_plan_exclusive() -> None:
     settings = SimpleNamespace(
         discord_role_sub_starter="111",
         discord_role_sub_pro="222",
@@ -203,9 +203,56 @@ def test_roles_for_plan_stacked() -> None:
         discord_role_resello_vip="999",
     )
     assert roles_for_plan("starter", settings) == ["111"]
-    assert roles_for_plan("premium", settings) == ["111", "222"]
-    assert roles_for_plan("elite", settings) == ["111", "222", "333"]
-    assert roles_for_plan("pro", settings) == ["111", "222"]
+    assert roles_for_plan("premium", settings) == ["222"]
+    assert roles_for_plan("elite", settings) == ["333"]
+    assert roles_for_plan("pro", settings) == ["222"]
+    assert roles_for_plan("proplus", settings) == ["333"]
+
+
+def test_deactivate_skips_stale_membership(monkeypatch) -> None:
+    """Annuler un ancien abo (Pro) ne doit pas retirer le nouvel abo (Pro+)."""
+    settings = SimpleNamespace(
+        whop_product_starter="",
+        whop_product_pro="prod_pro",
+        whop_product_proplus="prod_plus",
+        discord_role_resello_vip="1",
+        discord_guild_id="2",
+        discord_bot_token="",
+    )
+    called = {"n": 0}
+
+    def fake_deactivate(**kw):
+        called["n"] += 1
+
+    class _Row:
+        discord_user_id = 99
+        whop_membership_id = "mem_new_proplus"
+
+    class _Session:
+        def scalar(self, *_a, **_k):
+            return _Row()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+    monkeypatch.setattr(
+        "vinted_bot.services.whop_webhooks.deactivate_subscription",
+        fake_deactivate,
+    )
+    monkeypatch.setattr(
+        "vinted_bot.db.session.session_scope",
+        lambda: _Session(),
+    )
+    status = handle_whop_event(
+        "membership.deactivated",
+        {"id": "mem_old_pro", "product": {"id": "prod_pro"}},
+        settings=settings,
+    )
+    assert status == "deactivate_skip_stale"
+    assert called["n"] == 0
 
 
 def test_roles_for_plan_vip_fallback() -> None:
