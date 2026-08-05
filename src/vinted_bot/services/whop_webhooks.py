@@ -506,7 +506,7 @@ class _WhopWebhookHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
-        if path in {"/health", "/webhooks/whop/health"}:
+        if path in {"/health", "/webhooks/whop/health", "/"}:
             self._send(200, "ok")
             return
         self._send(404, "not found")
@@ -549,35 +549,45 @@ class _WhopWebhookHandler(BaseHTTPRequestHandler):
 def start_whop_webhook_server(
     settings: Settings | None = None,
 ) -> ThreadingHTTPServer | None:
-    """Démarre le serveur HTTP Whop en thread daemon."""
+    """Démarre le serveur HTTP Whop en thread daemon.
+
+    Toujours démarré (healthcheck Railway sur PORT), même sans secret Whop.
+    """
     s = settings or get_settings()
     host = (s.whop_webhook_host or "0.0.0.0").strip() or "0.0.0.0"
     port = s.effective_whop_webhook_port()
-    # Toujours démarrer si VIP / secret / produits configurés
-    if not any(
-        [
-            (s.whop_webhook_secret or "").strip(),
-            (s.discord_role_resello_vip or "").strip(),
-            (s.discord_role_sub_starter or "").strip(),
-            (s.discord_role_sub_pro or "").strip(),
-            (s.discord_role_sub_proplus or "").strip(),
-            product_plan_map(s),
-        ]
-    ):
-        log.info("whop_webhook_server_skip", reason="not_configured")
-        return None
 
     handler = type(
         "BoundWhopWebhookHandler",
         (_WhopWebhookHandler,),
         {"settings": s},
     )
-    server = ThreadingHTTPServer((host, port), handler)
+    try:
+        server = ThreadingHTTPServer((host, port), handler)
+    except OSError as exc:
+        log.error(
+            "whop_webhook_server_bind_failed",
+            host=host,
+            port=port,
+            error=str(exc)[:200],
+        )
+        return None
     thread = threading.Thread(
         target=server.serve_forever,
         name="whop-webhook-http",
         daemon=True,
     )
     thread.start()
-    log.info("whop_webhook_server_start", host=host, port=port)
+    configured = bool(
+        (s.whop_webhook_secret or "").strip()
+        or (s.discord_role_sub_starter or "").strip()
+        or (s.discord_role_sub_pro or "").strip()
+        or product_plan_map(s)
+    )
+    log.info(
+        "whop_webhook_server_start",
+        host=host,
+        port=port,
+        whop_configured=configured,
+    )
     return server

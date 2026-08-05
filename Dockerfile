@@ -16,7 +16,8 @@ COPY alembic.ini ./
 
 RUN uv sync --frozen --no-dev
 
-# Railway injecte PORT ; le webhook Whop écoute dessus
+# Railway injecte PORT ; le webhook / healthcheck écoute dessus
 EXPOSE 8080
 
-CMD ["sh", "-c", "uv run alembic upgrade head && uv run vinted-bot discord-interactions"]
+# Migrations lancées dans discord-interactions après bind PORT (healthcheck OK)
+CMD ["uv", "run", "vinted-bot", "discord-interactions"]

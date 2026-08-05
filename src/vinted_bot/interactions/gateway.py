@@ -179,7 +179,16 @@ def run_discord_interactions() -> None:
     from vinted_bot.services.whop_webhooks import start_whop_webhook_server
 
     log.info("discord_interactions_start")
+    # Bind PORT immédiatement (healthcheck Railway avant Discord / DB)
     whop_server = start_whop_webhook_server()
+    try:
+        from alembic import command
+        from alembic.config import Config
+
+        command.upgrade(Config("alembic.ini"), "head")
+        log.info("alembic_upgrade_ok")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("alembic_upgrade_failed", error=str(exc)[:300])
     try:
         asyncio.run(run_discord_gateway())
     except KeyboardInterrupt:
