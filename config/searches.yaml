@@ -120,7 +120,7 @@ searches:
     query: ami paris
     # Ami Paris + AMI
     brand_ids: [7228770, 4615783]
-    priority: low
+    priority: high
     enabled: true
   - brand: the kooples
     query: the kooples
