@@ -7,7 +7,10 @@ WORKDIR /app
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PORT=8080 \
+    WHOP_WEBHOOK_HOST=0.0.0.0 \
+    WHOP_WEBHOOK_PORT=8080
 
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
@@ -16,8 +19,6 @@ COPY alembic.ini ./
 
 RUN uv sync --frozen --no-dev
 
-# Railway injecte PORT ; le webhook / healthcheck écoute dessus
 EXPOSE 8080
 
-# Migrations lancées dans discord-interactions après bind PORT (healthcheck OK)
 CMD ["uv", "run", "vinted-bot", "discord-interactions"]

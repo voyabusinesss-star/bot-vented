@@ -100,13 +100,18 @@ def test_verify_whop_signature_ws_prefix() -> None:
     assert verify_whop_signature(body, headers, secret) is True
 
 
-def test_effective_whop_webhook_port_prefers_railway_port() -> None:
+def test_effective_whop_webhook_port_prefers_railway_port(
+    monkeypatch,
+) -> None:
     from vinted_bot.config import Settings
 
+    monkeypatch.delenv("PORT", raising=False)
     local = Settings(whop_webhook_port=8788, port=None)
     assert local.effective_whop_webhook_port() == 8788
     railway = Settings(whop_webhook_port=8788, port=8080)
     assert railway.effective_whop_webhook_port() == 8080
+    monkeypatch.setenv("PORT", "9090")
+    assert Settings(whop_webhook_port=8788, port=None).effective_whop_webhook_port() == 9090
 
 
 def test_database_url_railway_prefix() -> None:

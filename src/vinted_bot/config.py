@@ -380,10 +380,15 @@ class Settings(BaseSettings):
         )
 
     def effective_whop_webhook_port(self) -> int:
-        """PORT (Railway) prioritaire, sinon WHOP_WEBHOOK_PORT (local)."""
+        """PORT (Railway) prioritaire, sinon WHOP_WEBHOOK_PORT, sinon 8080."""
+        import os
+
+        raw = (os.environ.get("PORT") or "").strip()
+        if raw.isdigit():
+            return int(raw)
         if self.port is not None:
             return int(self.port)
-        return int(self.whop_webhook_port or 8788)
+        return int(self.whop_webhook_port or 8080)
 
 
 @lru_cache

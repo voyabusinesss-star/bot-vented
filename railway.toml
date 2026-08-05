@@ -3,7 +3,8 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-healthcheckPath = "/health"
-healthcheckTimeout = 300
+# Healthcheck désactivé temporairement : le service doit d'abord
+# avoir un domaine public + Variables (sinon Railway échoue au Network).
+# Réactiver ensuite : healthcheckPath = "/health"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
