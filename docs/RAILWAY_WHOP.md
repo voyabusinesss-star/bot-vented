@@ -1,6 +1,7 @@
-# Railway — Discord interactions + webhook Whop (URL fixe)
+# Railway — Discord + Whop + scrape Vinted (24/7)
 
-Déploie le bot `discord-interactions` sur Railway pour que Whop appelle toujours la même URL HTTPS. Plus besoin de cloudflared / ngrok.
+Déploie le bot sur Railway : webhook Whop (URL HTTPS fixe) **et** scrape Vinted.
+Plus besoin de faire tourner le scrape en local.
 
 ## Architecture
 
@@ -8,9 +9,11 @@ Déploie le bot `discord-interactions` sur Railway pour que Whop appelle toujour
 Paiement Whop → https://<service>.up.railway.app/webhooks/whop
              → discord-interactions (Railway)
              → rôles Discord + Postgres
+
+scrape --loop (même container) → salons Discord marques / filtres privés
 ```
 
-Le scrape Vinted peut rester en local (`scrape --loop`). Ce service gère uniquement Discord + webhooks Whop.
+Désactiver le scrape : variable `ENABLE_SCRAPE=0`.
 
 ## Prérequis
 
@@ -57,8 +60,22 @@ WHOP_WEBHOOK_HOST=0.0.0.0
 # PORT est injecté par Railway — ne pas forcer WHOP_WEBHOOK_PORT en prod
 ```
 
-Optionnel mais utile si tu utilises les commandes slash / panels :
-`DISCORD_CHANNEL_*`, webhooks panels, etc.
+### Scrape Vinted (obligatoire si tu ne scrapes plus en local)
+
+Copier depuis ton `.env` local **toutes** les `DISCORD_CHANNEL_*` (marques, sneakers, `DISCORD_CHANNEL_ALL`, `DISCORD_CHANNEL_MES_ALERTES`, etc.) + :
+
+```env
+VINTED_BASE_URL=https://www.vinted.fr
+SCRAPE_HEADLESS=true
+REQUEST_DELAY_SECONDS=1.8
+MAX_RETRIES=3
+ENABLE_SCRAPE=1
+PRIVATE_FILTER_SCRAPE_INTERVAL_SECONDS=20
+```
+
+Astuce Railway : **Variables** → Raw Editor → colle le bloc `DISCORD_CHANNEL_*` de ton `.env`.
+
+Optionnel panels : `DISCORD_WEBHOOK_*`, etc.
 
 ## Brancher Whop (une seule fois)
 
