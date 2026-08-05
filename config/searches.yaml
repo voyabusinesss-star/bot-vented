@@ -10,12 +10,12 @@
 # Par défaut catalog_ids = [4, 5] (vêtements F/H) → pas de chaussures.
 
 priorities:
-  # Flux continu : toutes les marques chaque cycle
+  # Flux continu : high (Nike…) plus généreux pour ne pas rater le frais
   high:
     every_n_cycles: 1
-    extra_passes: 0
-    max_items: 10
-    max_discord_posts: 8
+    extra_passes: 1
+    max_items: 12
+    max_discord_posts: 10
   medium:
     every_n_cycles: 1
     extra_passes: 0

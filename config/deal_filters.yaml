@@ -22,7 +22,8 @@ settings:
   # Titre ambigu → fallback prix médian marque (ne rate pas l'annonce)
   use_category_fallback: true
   # Ignore les annonces en ligne depuis plus de X minutes (null = pas de limite)
-  max_listing_age_minutes: 45
+  # 90 min : laisse le temps à la rotation multi-marques (Railway)
+  max_listing_age_minutes: 90
   # Filtre enfant (titre + taille uniquement — pas de photos / description)
   reject_kids: true
   # Pas de chaussures sauf marques avec allow_shoes: true (luxe)

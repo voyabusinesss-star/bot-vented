@@ -866,24 +866,18 @@ class DiscordNotifier:
         self.post_message(brand_channel_id, payload)
 
         all_channel = sanitize_discord_channel_id(self.settings.discord_channel_all)
-        # Déjà filtré pour classiques ; pour #all on exige aussi un vêtement.
-        is_vetement_for_all = True
-        if is_classique_brand(listing.brand):
-            is_vetement_for_all = (
-                (category in VETEMENT_CATEGORIES)
-                if category and category != "default"
-                else is_clothing_not_shoe(listing.title)
-            )
-        mirror_all = belongs_in_all_vetement(
-            listing.brand,
-            is_shoe=is_shoe,
-            brand_channel_id=brand_channel_id,
-            sneaker_channel_ids=sneaker_ids,
-            is_vetement=is_vetement_for_all,
+        # #all-vetement = indémodables vêtements uniquement.
+        # Si on vient de poster sur un salon classique (pas sneakers),
+        # on mirror TOUJOURS — pas de 2e jugement catégorie (sinon écarts salon≠ALL).
+        mirror_all = (
+            bool(all_channel)
+            and all_channel != brand_channel_id
+            and brand_channel_id not in sneaker_ids
+            and not is_shoe
+            and is_classique_brand(listing.brand)
         )
-        if all_channel and all_channel != brand_channel_id and mirror_all:
+        if mirror_all:
             try:
-                # Pas de sleep entre marque et #all : même annonce, 2 salons
                 self.post_message(all_channel, payload)
             except Exception as exc:
                 log.warning(
@@ -898,7 +892,7 @@ class DiscordNotifier:
                 vinted_id=listing.vinted_id,
                 is_shoe=is_shoe,
                 brand_channel_id=brand_channel_id,
-                reason="sneaker_or_luxe_or_shoe",
+                reason="not_classique_clothing_or_sneaker_or_luxe",
             )
 
         return brand_channel_id

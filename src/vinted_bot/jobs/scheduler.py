@@ -47,7 +47,8 @@ def run_scrape_loop(
     restart_every = max(1, cfg.browser_restart_every_cycles)
     reconnect_delay = max(5.0, cfg.reconnect_delay_seconds)
     # Combien de marques YAML entre deux pulses filtres
-    yaml_batch_size = 1
+    # 4 = tour plus rapide sur Nike / classiques (évite annonces trop vieilles)
+    yaml_batch_size = 4
 
     log.info(
         "loop_start",
