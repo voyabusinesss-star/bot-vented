@@ -69,6 +69,9 @@ def run_scrape_loop(
             for name, p in cfg.priorities.items()
         },
     )
+    from vinted_bot.services.scrape_heartbeat import write_scrape_heartbeat
+
+    write_scrape_heartbeat(cycle=0, status="starting", brands=yaml_batch_size)
 
     browser: VintedBrowser | None = None
     cycles_on_browser = 0
@@ -167,6 +170,15 @@ def run_scrape_loop(
                         private_filter_pulse=ran_filters,
                         cycles_on_browser=cycles_on_browser,
                     )
+                    from vinted_bot.services.scrape_heartbeat import write_scrape_heartbeat
+
+                    write_scrape_heartbeat(
+                        cycle=cycle,
+                        posted=sum(r.items_posted_discord for r in results),
+                        created=sum(r.items_created for r in results),
+                        found=sum(r.items_found for r in results),
+                        brands=len(results),
+                    )
                 elif ran_filters:
                     log.info(
                         "loop_filter_only_done",
@@ -184,6 +196,13 @@ def run_scrape_loop(
 
             except Exception as exc:
                 log.exception("loop_cycle_failed", cycle=cycle, error=str(exc))
+                from vinted_bot.services.scrape_heartbeat import write_scrape_heartbeat
+
+                write_scrape_heartbeat(
+                    cycle=cycle,
+                    status="error",
+                    error=str(exc)[:200],
+                )
                 if browser is not None:
                     try:
                         browser.stop()

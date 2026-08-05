@@ -141,8 +141,15 @@ class VintedBrowser:
         self.warm_up()
 
     def _start_impl(self) -> None:
+        from vinted_bot.clients.playwright_browser import (
+            apply_vinted_stealth,
+            launch_vinted_browser,
+        )
+
         self._playwright = sync_playwright().start()
-        self._browser = self._playwright.chromium.launch(headless=self.headless)
+        self._browser = launch_vinted_browser(
+            self._playwright, headless=self.headless
+        )
         self._context = self._browser.new_context(
             locale="fr-FR",
             viewport={"width": 1280, "height": 900},
@@ -152,6 +159,7 @@ class VintedBrowser:
                 "Chrome/122.0.0.0 Safari/537.36"
             ),
         )
+        apply_vinted_stealth(self._context)
         self._page = self._context.new_page()
         self._page.set_default_timeout(self.timeout_ms)
 

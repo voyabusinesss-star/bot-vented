@@ -27,10 +27,14 @@ def launch_vinted_browser(
     Préfère ``channel=chrome`` (Google Chrome installé) pour éviter le Chromium
     Playwright manquant / le ``chrome-headless-shell`` du cache sandbox.
     """
+    # --no-sandbox / shm : obligatoire dans Docker/Railway (sinon Chromium crash)
     common = {
         "args": [
             "--disable-blink-features=AutomationControlled",
             "--disable-dev-shm-usage",
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-gpu",
         ],
         "ignore_default_args": ["--enable-automation"],
     }

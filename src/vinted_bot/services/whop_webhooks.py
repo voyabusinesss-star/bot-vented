@@ -524,7 +524,18 @@ class _WhopWebhookHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
         if path in {"/health", "/webhooks/whop/health", "/"}:
-            self._send(200, "ok")
+            from vinted_bot.services.scrape_heartbeat import scrape_health_line
+
+            self._send(200, f"ok {scrape_health_line()}")
+            return
+        if path == "/health/scrape":
+            from vinted_bot.services.scrape_heartbeat import read_scrape_heartbeat
+
+            data = read_scrape_heartbeat()
+            if not data:
+                self._send(503, "scrape heartbeat missing")
+                return
+            self._send(200, json.dumps(data, ensure_ascii=False))
             return
         self._send(404, "not found")
 

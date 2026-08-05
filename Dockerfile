@@ -16,7 +16,7 @@ ENV UV_COMPILE_BYTECODE=1 \
     ENABLE_DETECTOR=1 \
     ENABLE_FICHES=1
 
-# Dépendances système Playwright / Chromium
+# Dépendances système Playwright / Chromium (Docker / Railway)
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \
       curl \
@@ -41,6 +41,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
+# Chromium Playwright a besoin de /dev/shm suffisant côté runtime Railway
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0
+
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 COPY alembic ./alembic
@@ -50,7 +54,7 @@ COPY scripts/railway-entrypoint.sh /app/scripts/railway-entrypoint.sh
 
 RUN chmod +x /app/scripts/railway-entrypoint.sh \
     && uv sync --frozen --no-dev \
-    && uv run playwright install chromium
+    && uv run playwright install --with-deps chromium
 
 EXPOSE 8080
 
