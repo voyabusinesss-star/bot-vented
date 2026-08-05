@@ -2,6 +2,10 @@
 # Railway : Discord/Whop + scrape + détecteur niches + fiches produit.
 set -eu
 
+echo "[railway] migrations alembic…"
+uv run alembic upgrade head
+echo "[railway] migrations ok"
+
 _supervise() {
   name="$1"
   shift
