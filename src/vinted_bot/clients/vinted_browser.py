@@ -323,8 +323,11 @@ class VintedBrowser:
 
         self.page.on("response", _on_response)
         try:
-            self.page.goto(search_url, wait_until="domcontentloaded")
-            self.page.wait_for_timeout(2000)
+            self.page.goto(search_url, wait_until="commit", timeout=min(self.timeout_ms, 45_000))
+            try:
+                self.page.wait_for_timeout(1500)
+            except Exception:  # noqa: BLE001
+                pass
             if catalog_payload is None:
                 catalog_payload = self._fetch_catalog_via_page(params)
         finally:
