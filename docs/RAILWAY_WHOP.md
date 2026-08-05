@@ -10,10 +10,12 @@ Paiement Whop → https://<service>.up.railway.app/webhooks/whop
              → discord-interactions (Railway)
              → rôles Discord + Postgres
 
-scrape --loop (même container) → salons Discord marques / filtres privés
+scrape --loop     → salons marques + filtres privés (si filtres créés)
+detector --loop   → détecteur de niches
+fiches-produit    → fiches produit
 ```
 
-Désactiver le scrape : variable `ENABLE_SCRAPE=0`.
+Désactiver un worker : `ENABLE_SCRAPE=0` / `ENABLE_DETECTOR=0` / `ENABLE_FICHES=0`.
 
 ## Prérequis
 

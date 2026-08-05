@@ -1,20 +1,40 @@
 #!/bin/sh
-# Railway : Discord interactions + webhook Whop + scrape Vinted (même service).
+# Railway : Discord/Whop + scrape + détecteur niches + fiches produit.
 set -eu
 
-ENABLE_SCRAPE="${ENABLE_SCRAPE:-1}"
-
-if [ "$ENABLE_SCRAPE" = "1" ] || [ "$ENABLE_SCRAPE" = "true" ]; then
-  echo "[railway] démarrage scrape --loop (supervisé)"
+_supervise() {
+  name="$1"
+  shift
+  echo "[railway] démarrage $name (supervisé)"
   (
     while true; do
-      uv run vinted-bot scrape --loop || true
-      echo "[railway] scrape arrêté — redémarrage dans 15s"
-      sleep 15
+      "$@" || true
+      echo "[railway] $name arrêté — redémarrage dans 20s"
+      sleep 20
     done
   ) &
+}
+
+ENABLE_SCRAPE="${ENABLE_SCRAPE:-1}"
+ENABLE_DETECTOR="${ENABLE_DETECTOR:-1}"
+ENABLE_FICHES="${ENABLE_FICHES:-1}"
+
+if [ "$ENABLE_SCRAPE" = "1" ] || [ "$ENABLE_SCRAPE" = "true" ]; then
+  _supervise "scrape" uv run vinted-bot scrape --loop
 else
   echo "[railway] ENABLE_SCRAPE=0 — scrape désactivé"
+fi
+
+if [ "$ENABLE_DETECTOR" = "1" ] || [ "$ENABLE_DETECTOR" = "true" ]; then
+  _supervise "detector" uv run vinted-bot detector --loop
+else
+  echo "[railway] ENABLE_DETECTOR=0 — détecteur niches désactivé"
+fi
+
+if [ "$ENABLE_FICHES" = "1" ] || [ "$ENABLE_FICHES" = "true" ]; then
+  _supervise "fiches" uv run vinted-bot fiches-produit --loop
+else
+  echo "[railway] ENABLE_FICHES=0 — fiches produit désactivées"
 fi
 
 echo "[railway] démarrage discord-interactions (foreground)"
