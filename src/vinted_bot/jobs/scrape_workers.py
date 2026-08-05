@@ -14,7 +14,6 @@ from typing import Sequence
 from vinted_bot.clients.vinted_browser import VintedBrowser
 from vinted_bot.config import get_settings
 from vinted_bot.config_loader import (
-    PRIORITY_RANK,
     SearchTarget,
     active_searches_for_channels,
     load_searches_config,
@@ -33,12 +32,12 @@ def partition_targets(
     targets: Sequence[SearchTarget],
     n_workers: int,
 ) -> list[list[SearchTarget]]:
-    """Répartit les cibles en groupes sticky (high priority d'abord, round-robin)."""
+    """Répartit les cibles en groupes sticky équilibrés (pas de file low en fin)."""
     n = max(1, int(n_workers))
+    # Round-robin pur sur liste triée marque — chaque salon a une place équitable
     ordered = sorted(
         targets,
         key=lambda t: (
-            PRIORITY_RANK.get(t.priority, 9),
             t.brand,
             t.query,
             tuple(t.catalog_ids),

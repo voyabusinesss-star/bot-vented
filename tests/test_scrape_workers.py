@@ -35,7 +35,7 @@ def test_partition_targets_sticky_and_balanced() -> None:
     assert len(groups) == 3
     flat = [t.brand for g in groups for t in g]
     assert sorted(flat) == sorted(t.brand for t in targets)
-    # high priority appears before low in global order → early buckets
+    # Round-robin équitable — tailles proches
     assert all(len(g) >= 1 for g in groups)
     sizes = [len(g) for g in groups]
     assert max(sizes) - min(sizes) <= 1

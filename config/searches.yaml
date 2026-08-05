@@ -95,26 +95,26 @@ searches:
     priority: medium
     enabled: true
 
-  # --- Priorité basse (moins de volume) ---
+  # --- Priorité moyenne (ex-low : plus de retard salon) ---
   - brand: dickies
     query: dickies
     brand_ids: [65]
-    priority: low
+    priority: medium
     enabled: true
   - brand: under armour
     query: under armour
     brand_ids: [52035]
-    priority: low
+    priority: medium
     enabled: true
   - brand: supreme
     query: supreme
     brand_ids: [14969]
-    priority: low
+    priority: medium
     enabled: true
   - brand: levis
     query: levis
     brand_ids: [10]
-    priority: low
+    priority: medium
     enabled: true
   - brand: ami paris
     query: ami paris
@@ -125,12 +125,12 @@ searches:
   - brand: the kooples
     query: the kooples
     brand_ids: [2021]
-    priority: low
+    priority: medium
     enabled: true
   - brand: columbia
     query: columbia
     brand_ids: [17161]
-    priority: low
+    priority: medium
     enabled: true
 
   # --- Luxe revente (forte valeur) ---
@@ -215,22 +215,22 @@ searches:
   - brand: acne studios
     query: acne studios
     brand_ids: [180798]
-    priority: low
+    priority: medium
     enabled: true
   - brand: toteme
     query: toteme
     brand_ids: [546105]
-    priority: low
+    priority: medium
     enabled: true
   - brand: ganni
     query: ganni
     brand_ids: [170650]
-    priority: low
+    priority: medium
     enabled: true
   - brand: comme des garcons
     query: comme des garcons
     brand_ids: [16352233]
-    priority: low
+    priority: medium
     enabled: true
 
   # --- Pépites Sneakers (chaussures F/H uniquement) ---
@@ -299,13 +299,13 @@ searches:
     query: ugg
     brand_ids: [2239]
     catalog_ids: [1231, 1242]
-    priority: low
+    priority: medium
     enabled: true
   - brand: birkenstock
     query: birkenstock
     brand_ids: [3203]
     catalog_ids: [1231, 1242]
-    priority: low
+    priority: medium
     enabled: true
 
 defaults:
