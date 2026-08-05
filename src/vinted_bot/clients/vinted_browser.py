@@ -72,10 +72,12 @@ class VintedBrowser:
         headless: bool = True,
         delay_seconds: float = 1.0,
         timeout_ms: int = 45_000,
+        proxy_url: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.headless = headless
         self.timeout_ms = timeout_ms
+        self.proxy_url = (proxy_url or "").strip() or None
         self.rate_limiter = RateLimiter(delay_seconds)
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
@@ -134,8 +136,11 @@ class VintedBrowser:
         self._thread.join(timeout=30)
         self._thread = None
 
-    def restart(self) -> None:
-        log.info("browser_restart")
+    def restart(self, *, proxy_url: str | None = None) -> None:
+        """Recycle le navigateur. ``proxy_url`` non-None remplace le proxy sticky."""
+        if proxy_url is not None:
+            self.proxy_url = (proxy_url or "").strip() or None
+        log.info("browser_restart", proxy=bool(self.proxy_url))
         self.stop()
         self.start()
         self.warm_up()
@@ -145,20 +150,34 @@ class VintedBrowser:
             apply_vinted_stealth,
             launch_vinted_browser,
         )
+        from vinted_bot.utils.proxy import playwright_proxy_from_url
+
+        proxy_dict = None
+        if self.proxy_url:
+            try:
+                proxy_dict = playwright_proxy_from_url(self.proxy_url)
+            except ValueError as exc:
+                log.warning("browser_proxy_invalid", error=str(exc), url=self.proxy_url)
+                proxy_dict = None
 
         self._playwright = sync_playwright().start()
         self._browser = launch_vinted_browser(
-            self._playwright, headless=self.headless
+            self._playwright,
+            headless=self.headless,
+            proxy=proxy_dict,
         )
-        self._context = self._browser.new_context(
-            locale="fr-FR",
-            viewport={"width": 1280, "height": 900},
-            user_agent=(
+        context_kwargs: dict[str, Any] = {
+            "locale": "fr-FR",
+            "viewport": {"width": 1280, "height": 900},
+            "user_agent": (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/122.0.0.0 Safari/537.36"
             ),
-        )
+        }
+        # Proxy déjà passé au launch ; Playwright accepte aussi au context.
+        # On le met au launch uniquement pour éviter double-config.
+        self._context = self._browser.new_context(**context_kwargs)
         apply_vinted_stealth(self._context)
         self._page = self._context.new_page()
         self._page.set_default_timeout(self.timeout_ms)
@@ -360,11 +379,13 @@ def vinted_browser(
     base_url: str = DEFAULT_BASE_URL,
     headless: bool = True,
     delay_seconds: float = 1.0,
+    proxy_url: str | None = None,
 ) -> Generator[VintedBrowser, None, None]:
     client = VintedBrowser(
         base_url=base_url,
         headless=headless,
         delay_seconds=delay_seconds,
+        proxy_url=proxy_url,
     )
     client.start()
     try:

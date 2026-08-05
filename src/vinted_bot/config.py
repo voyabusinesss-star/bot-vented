@@ -5,8 +5,9 @@ from __future__ import annotations
 import base64
 import re
 from functools import lru_cache
+from typing import Self
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Clé marque normalisée (espaces) → champ Settings / env DISCORD_CHANNEL_*
@@ -171,8 +172,26 @@ class Settings(BaseSettings):
     request_delay_seconds: float = 1.0
     max_retries: int = 3
     scrape_headless: bool = True
-    # Navigateurs Playwright en parallèle (1 par worker). 6 ≈ bon compromis Railway.
+    # Navigateurs Playwright permanents (1 par worker). 6 ≈ bon compromis Railway.
     scrape_parallel_workers: int = Field(default=6, ge=1, le=20)
+    # Pause entre deux recherches du même worker (2–5 s)
+    scrape_poll_seconds_min: float = Field(default=2.0, ge=0.5)
+    scrape_poll_seconds_max: float = Field(default=5.0, ge=0.5)
+    # Proxies HTTP/SOCKS (CSV ou lignes) — 1 sticky par worker, rotation au recycle
+    scrape_proxy_urls: list[str] = Field(default_factory=list)
+
+    @field_validator("scrape_proxy_urls", mode="before")
+    @classmethod
+    def _parse_scrape_proxy_urls(cls, value: object) -> list[str]:
+        from vinted_bot.utils.proxy import parse_proxy_url_list
+
+        return parse_proxy_url_list(value)
+
+    @model_validator(mode="after")
+    def _ensure_poll_range(self) -> Self:
+        if self.scrape_poll_seconds_max < self.scrape_poll_seconds_min:
+            self.scrape_poll_seconds_max = self.scrape_poll_seconds_min
+        return self
 
     discord_enabled: bool = True
     discord_bot_token: str = ""

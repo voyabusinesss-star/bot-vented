@@ -21,14 +21,16 @@ def launch_vinted_browser(
     playwright: Any,
     *,
     headless: bool = True,
+    proxy: dict[str, str] | None = None,
 ) -> Any:
     """Lance Chrome système pour Vinted.
 
     Préfère ``channel=chrome`` (Google Chrome installé) pour éviter le Chromium
     Playwright manquant / le ``chrome-headless-shell`` du cache sandbox.
+    ``proxy`` : dict Playwright ``{server, username?, password?}``.
     """
     # --no-sandbox / shm : obligatoire dans Docker/Railway (sinon Chromium crash)
-    common = {
+    common: dict[str, Any] = {
         "args": [
             "--disable-blink-features=AutomationControlled",
             "--disable-dev-shm-usage",
@@ -38,6 +40,9 @@ def launch_vinted_browser(
         ],
         "ignore_default_args": ["--enable-automation"],
     }
+    if proxy:
+        common["proxy"] = proxy
+        log.info("playwright_proxy_enabled", server=proxy.get("server"))
 
     try:
         return playwright.chromium.launch(channel="chrome", headless=headless, **common)
