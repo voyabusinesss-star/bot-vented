@@ -27,11 +27,11 @@ def run_scrape_loop(
     """
     Tourne indéfiniment :
     - pulse fréquent des **filtres privés** (alertes DM)
-    - toutes les marques YAML à chaque tour (spawn continu dès qu'une annonce match)
+    - **toutes** les marques YAML en parallèle chaque tour
     """
     settings = get_settings()
-    # Worker DM filtres privés (file async — ne bloque jamais le scrape)
     from vinted_bot.services.private_alert_queue import ensure_private_alert_worker
+    from vinted_bot.services.scrape_heartbeat import write_scrape_heartbeat
 
     ensure_private_alert_worker()
 
@@ -44,17 +44,14 @@ def run_scrape_loop(
     filter_interval = float(
         getattr(settings, "private_filter_scrape_interval_seconds", 20.0) or 20.0
     )
-    restart_every = max(1, cfg.browser_restart_every_cycles)
     reconnect_delay = max(5.0, cfg.reconnect_delay_seconds)
-    # Petits lots = posts Discord plus tôt (évite 15 min de silence sur 45 marques)
-    yaml_batch_size = 4
+    parallel_workers = max(1, int(getattr(settings, "scrape_parallel_workers", 6) or 6))
 
     log.info(
         "loop_start",
         interval_seconds=interval,
         private_filter_scrape_interval_seconds=filter_interval,
-        yaml_batch_size=yaml_batch_size,
-        browser_restart_every_cycles=restart_every,
+        scrape_parallel_workers=parallel_workers,
         max_items=max_items or cfg.max_items,
         priorities={
             name: {
@@ -66,16 +63,13 @@ def run_scrape_loop(
             for name, p in cfg.priorities.items()
         },
     )
-    from vinted_bot.services.scrape_heartbeat import write_scrape_heartbeat
+    write_scrape_heartbeat(
+        cycle=0, status="starting", workers=parallel_workers
+    )
 
-    write_scrape_heartbeat(cycle=0, status="starting", brands=yaml_batch_size)
-
-    browser: VintedBrowser | None = None
-    cycles_on_browser = 0
+    filter_browser: VintedBrowser | None = None
     cycle = 0
     yaml_cycle = 0
-    yaml_queue: list = []
-    yaml_queue_pos = 0
     last_filter_pulse = 0.0
 
     try:
@@ -83,26 +77,20 @@ def run_scrape_loop(
             cycle += 1
             cycle_started = time.monotonic()
             try:
-                # DB avant / hors greenlet Playwright (évite MissingGreenlet)
                 filter_targets = active_filter_search_targets()
                 ran_filters = False
                 now = time.monotonic()
 
-                if browser is None:
-                    write_scrape_heartbeat(cycle=cycle, status="browser_start")
-                    browser = VintedBrowser(
-                        base_url=settings.vinted_base_url,
-                        headless=headless,
-                        delay_seconds=settings.request_delay_seconds,
-                    )
-                    browser.start()
-                    browser.warm_up()
-                    cycles_on_browser = 0
-                    write_scrape_heartbeat(cycle=cycle, status="browser_ready")
-
-
-                # 1) Toujours prioriser les filtres privés dès que l'intervalle est écoulé
+                # 1) Filtres privés (navigateur dédié, séquentiel)
                 if filter_targets and (now - last_filter_pulse) >= filter_interval:
+                    if filter_browser is None:
+                        filter_browser = VintedBrowser(
+                            base_url=settings.vinted_base_url,
+                            headless=headless,
+                            delay_seconds=settings.request_delay_seconds,
+                        )
+                        filter_browser.start()
+                        filter_browser.warm_up()
                     log.info(
                         "loop_private_filter_pulse",
                         cycle=cycle,
@@ -112,117 +100,93 @@ def run_scrape_loop(
                     scrape_all_configured(
                         max_items=max_items,
                         headless=headless,
-                        browser=browser,
+                        browser=filter_browser,
                         targets=filter_targets,
                         cycle=cycle,
                         include_user_filters=False,
+                        workers=1,
                     )
                     last_filter_pulse = time.monotonic()
                     ran_filters = True
-                    cycles_on_browser += 1
 
-                # 2) Toutes les marques dues ce cycle (pas de tranche partielle)
+                # 2) Toutes les marques en parallèle (N navigateurs)
                 channel_map = settings.brand_channel_map()
                 sneaker_map = settings.sneaker_channel_map()
                 all_targets = active_searches_for_channels(
                     channel_map, sneaker_map=sneaker_map
                 )
-                if not yaml_queue or yaml_queue_pos >= len(yaml_queue):
-                    yaml_cycle += 1
-                    yaml_queue = select_targets_for_cycle(
-                        yaml_cycle, all_targets, cfg.priorities
-                    )
-                    yaml_queue_pos = 0
-                    log.info(
-                        "loop_yaml_queue_refill",
-                        yaml_cycle=yaml_cycle,
-                        due=len(yaml_queue),
-                        brands=[t.brand for t in yaml_queue[:12]],
-                    )
-
-                batch = yaml_queue[yaml_queue_pos : yaml_queue_pos + yaml_batch_size]
-                yaml_queue_pos += len(batch)
-                if batch:
-                    log.info(
-                        "loop_yaml_batch",
-                        cycle=cycle,
-                        brands=[t.brand for t in batch],
-                        remaining=max(0, len(yaml_queue) - yaml_queue_pos),
-                    )
-                    results = scrape_all_configured(
-                        max_items=max_items,
-                        headless=headless,
-                        browser=browser,
-                        targets=batch,
-                        cycle=cycle,
-                        include_user_filters=False,
-                    )
-                    cycles_on_browser += 1
-                    log.info(
-                        "loop_cycle_done",
-                        cycle=cycle,
-                        elapsed_seconds=round(time.monotonic() - cycle_started, 2),
-                        searches=len(results),
-                        created=sum(r.items_created for r in results),
-                        posted=sum(r.items_posted_discord for r in results),
-                        found=sum(r.items_found for r in results),
-                        private_filter_pulse=ran_filters,
-                        cycles_on_browser=cycles_on_browser,
-                    )
-                    from vinted_bot.services.scrape_heartbeat import write_scrape_heartbeat
-
-                    write_scrape_heartbeat(
-                        cycle=cycle,
-                        posted=sum(r.items_posted_discord for r in results),
-                        created=sum(r.items_created for r in results),
-                        found=sum(r.items_found for r in results),
-                        skipped_deal=sum(r.items_skipped_deal for r in results),
-                        brands=len(results),
-                        brand_names=[t.brand for t in batch[:8]],
-                    )
-                elif ran_filters:
-                    log.info(
-                        "loop_filter_only_done",
-                        cycle=cycle,
-                        elapsed_seconds=round(time.monotonic() - cycle_started, 2),
-                    )
-                else:
-                    log.info("loop_idle", cycle=cycle)
-
-                if cycles_on_browser >= restart_every:
-                    log.info("loop_browser_recycle", cycle=cycle)
-                    browser.stop()
-                    browser = None
-                    cycles_on_browser = 0
+                yaml_cycle += 1
+                due = select_targets_for_cycle(
+                    yaml_cycle, all_targets, cfg.priorities
+                )
+                write_scrape_heartbeat(
+                    cycle=cycle,
+                    status="scraping",
+                    brands=len(due),
+                    workers=parallel_workers,
+                )
+                log.info(
+                    "loop_yaml_parallel",
+                    cycle=cycle,
+                    brands=len(due),
+                    workers=parallel_workers,
+                    sample=[t.brand for t in due[:12]],
+                )
+                results = scrape_all_configured(
+                    max_items=max_items,
+                    headless=headless,
+                    browser=None,
+                    targets=due,
+                    cycle=cycle,
+                    include_user_filters=False,
+                    workers=parallel_workers,
+                )
+                log.info(
+                    "loop_cycle_done",
+                    cycle=cycle,
+                    elapsed_seconds=round(time.monotonic() - cycle_started, 2),
+                    searches=len(results),
+                    created=sum(r.items_created for r in results),
+                    posted=sum(r.items_posted_discord for r in results),
+                    found=sum(r.items_found for r in results),
+                    skipped_deal=sum(r.items_skipped_deal for r in results),
+                    private_filter_pulse=ran_filters,
+                    workers=parallel_workers,
+                )
+                write_scrape_heartbeat(
+                    cycle=cycle,
+                    posted=sum(r.items_posted_discord for r in results),
+                    created=sum(r.items_created for r in results),
+                    found=sum(r.items_found for r in results),
+                    skipped_deal=sum(r.items_skipped_deal for r in results),
+                    brands=len(results),
+                    workers=parallel_workers,
+                )
 
             except Exception as exc:
                 log.exception("loop_cycle_failed", cycle=cycle, error=str(exc))
-                from vinted_bot.services.scrape_heartbeat import write_scrape_heartbeat
-
                 write_scrape_heartbeat(
                     cycle=cycle,
                     status="error",
                     error=str(exc)[:200],
                 )
-                if browser is not None:
+                if filter_browser is not None:
                     try:
-                        browser.stop()
+                        filter_browser.stop()
                     except Exception:
                         pass
-                    browser = None
-                    cycles_on_browser = 0
+                    filter_browser = None
                 log.info("loop_reconnect_wait", seconds=reconnect_delay)
                 time.sleep(reconnect_delay)
                 continue
 
-            # Zéro file d'attente artificielle : enchaîne immédiatement le prochain tour.
             remaining = max(0.2, float(interval))
             log.info("loop_sleep", seconds=round(remaining, 1), next_cycle=cycle + 1)
             time.sleep(remaining)
     finally:
-        if browser is not None:
+        if filter_browser is not None:
             try:
-                browser.stop()
+                filter_browser.stop()
             except Exception:
                 pass
         log.info("loop_stopped", last_cycle=cycle)

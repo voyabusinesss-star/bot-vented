@@ -171,6 +171,8 @@ class Settings(BaseSettings):
     request_delay_seconds: float = 1.0
     max_retries: int = 3
     scrape_headless: bool = True
+    # Navigateurs Playwright en parallèle (1 par worker). 6 ≈ bon compromis Railway.
+    scrape_parallel_workers: int = Field(default=6, ge=1, le=20)
 
     discord_enabled: bool = True
     discord_bot_token: str = ""

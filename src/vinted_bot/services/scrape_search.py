@@ -490,10 +490,13 @@ def scrape_all_configured(
     cycle: int | None = None,
     max_discord_posts: int | None = None,
     include_user_filters: bool = True,
+    workers: int | None = None,
 ) -> list[ScrapeSearchResult]:
     """Scrape les recherches actives (ou une liste filtrée par priorité).
 
     max_discord_posts=0 : collecte silencieuse (pipeline détecteur / filtres privés).
+    workers>1 : plusieurs navigateurs en parallèle (toutes les marques en même temps).
+    Si ``browser`` est fourni, reste séquentiel sur ce navigateur.
     """
     settings = get_settings()
     searches_cfg = load_searches_config()
@@ -521,6 +524,18 @@ def scrape_all_configured(
         log.warning("scrape_all_no_targets")
         return []
 
+    parallel = max(
+        1,
+        int(
+            workers
+            if workers is not None
+            else getattr(settings, "scrape_parallel_workers", 1) or 1
+        ),
+    )
+    # Un navigateur partagé = forcément séquentiel (Playwright non thread-safe)
+    if browser is not None:
+        parallel = 1
+
     log.info(
         "scrape_all_start",
         targets=len(all_targets),
@@ -529,108 +544,156 @@ def scrape_all_configured(
         cycle=cycle,
         max_items=default_max,
         max_discord_posts=max_discord_posts,
+        workers=parallel,
     )
 
-    results: list[ScrapeSearchResult] = []
+    def _scrape_target(
+        index: int,
+        target: SearchTarget,
+        active: VintedBrowser,
+    ) -> ScrapeSearchResult | None:
+        from vinted_bot.config_loader import resolve_policy
 
-    def _run(active: VintedBrowser) -> None:
-        for index, target in enumerate(all_targets):
-            from vinted_bot.config_loader import resolve_policy
+        policy = resolve_policy(target, searches_cfg.priorities)
+        per_search = max_items or policy.max_items or default_max
+        if max_discord_posts is not None:
+            discord_cap = max_discord_posts
+        elif target.max_discord_posts is not None:
+            discord_cap = target.max_discord_posts
+        elif policy.max_discord_posts is not None:
+            discord_cap = policy.max_discord_posts
+        else:
+            discord_cap = searches_cfg.max_discord_posts
 
-            policy = resolve_policy(target, searches_cfg.priorities)
-            per_search = max_items or policy.max_items or default_max
-            if max_discord_posts is not None:
-                discord_cap = max_discord_posts
-            elif target.max_discord_posts is not None:
-                discord_cap = target.max_discord_posts
-            elif policy.max_discord_posts is not None:
-                discord_cap = policy.max_discord_posts
+        is_user_filter = getattr(target, "source", "yaml") == "user_filter"
+        if is_user_filter:
+            discord_cap = 0
+
+        expected_brand = target.brand
+        skip_brand_filter = False
+        keep_text = False
+        if is_user_filter:
+            keep_text = True
+            if not target.brand or target.brand == "filter":
+                expected_brand = None
+                skip_brand_filter = True
             else:
-                discord_cap = searches_cfg.max_discord_posts
+                skip_brand_filter = True
 
-            is_user_filter = getattr(target, "source", "yaml") == "user_filter"
-            if is_user_filter:
-                discord_cap = 0
-
-            expected_brand = target.brand
-            skip_brand_filter = False
-            keep_text = False
-            if is_user_filter:
-                keep_text = True
-                if not target.brand or target.brand == "filter":
-                    expected_brand = None
-                    skip_brand_filter = True
-                else:
-                    # Marque connue : filtre expected_brand, ignore allowlist salons
-                    skip_brand_filter = True
-
-            started = time.monotonic()
-            log.info(
-                "scrape_all_target",
-                index=index + 1,
-                total=len(all_targets),
-                brand=target.brand,
-                query=target.query,
-                priority=target.priority,
-                source=getattr(target, "source", "yaml"),
+        started = time.monotonic()
+        log.info(
+            "scrape_all_target",
+            index=index + 1,
+            total=len(all_targets),
+            brand=target.brand,
+            query=target.query,
+            priority=target.priority,
+            source=getattr(target, "source", "yaml"),
+            max_items=per_search,
+            max_discord_posts=discord_cap,
+            brand_ids=target.brand_ids,
+            catalog_ids=target.catalog_ids,
+            price_from=getattr(target, "price_from", None),
+            price_to=getattr(target, "price_to", None),
+        )
+        try:
+            result = scrape_search_once(
+                target.query,
                 max_items=per_search,
+                headless=headless,
+                browser=active,
+                expected_brand=expected_brand,
+                brand_ids=target.brand_ids or None,
+                catalog_ids=target.catalog_ids or None,
+                order=target.order or searches_cfg.order,
                 max_discord_posts=discord_cap,
-                brand_ids=target.brand_ids,
-                catalog_ids=target.catalog_ids,
                 price_from=getattr(target, "price_from", None),
                 price_to=getattr(target, "price_to", None),
+                skip_brand_channel_filter=skip_brand_filter,
+                keep_search_text=keep_text,
             )
-            try:
-                result = scrape_search_once(
-                    target.query,
-                    max_items=per_search,
-                    headless=headless,
-                    browser=active,
-                    expected_brand=expected_brand,
-                    brand_ids=target.brand_ids or None,
-                    catalog_ids=target.catalog_ids or None,
-                    order=target.order or searches_cfg.order,
-                    max_discord_posts=discord_cap,
-                    price_from=getattr(target, "price_from", None),
-                    price_to=getattr(target, "price_to", None),
-                    skip_brand_channel_filter=skip_brand_filter,
-                    keep_search_text=keep_text,
-                )
-                duration = round(time.monotonic() - started, 2)
-                results.append(result)
-                log.info(
-                    "scrape_all_target_done",
-                    brand=target.brand,
-                    priority=target.priority,
-                    source=getattr(target, "source", "yaml"),
-                    duration_seconds=duration,
-                    created=result.items_created,
-                    posted=result.items_posted_discord,
-                    found=result.items_found,
-                    skipped_deal=result.items_skipped_deal,
-                )
-            except Exception as exc:
-                duration = round(time.monotonic() - started, 2)
-                log.exception(
-                    "scrape_all_target_failed",
-                    brand=target.brand,
-                    query=target.query,
-                    duration_seconds=duration,
-                    error=str(exc),
-                )
-            if index < len(all_targets) - 1:
-                time.sleep(searches_cfg.delay_between_searches_seconds)
+            duration = round(time.monotonic() - started, 2)
+            log.info(
+                "scrape_all_target_done",
+                brand=target.brand,
+                priority=target.priority,
+                source=getattr(target, "source", "yaml"),
+                duration_seconds=duration,
+                created=result.items_created,
+                posted=result.items_posted_discord,
+                found=result.items_found,
+                skipped_deal=result.items_skipped_deal,
+            )
+            return result
+        except Exception as exc:
+            duration = round(time.monotonic() - started, 2)
+            log.exception(
+                "scrape_all_target_failed",
+                brand=target.brand,
+                query=target.query,
+                duration_seconds=duration,
+                error=str(exc),
+            )
+            return None
 
-    if browser is not None:
-        _run(browser)
-    else:
+    def _run_chunk(chunk: list[tuple[int, SearchTarget]]) -> list[ScrapeSearchResult]:
+        out: list[ScrapeSearchResult] = []
         with vinted_browser(
             base_url=settings.vinted_base_url,
             headless=headless,
             delay_seconds=settings.request_delay_seconds,
         ) as active:
             active.warm_up()
-            _run(active)
+            for pos, (index, target) in enumerate(chunk):
+                result = _scrape_target(index, target, active)
+                if result is not None:
+                    out.append(result)
+                if pos < len(chunk) - 1 and searches_cfg.delay_between_searches_seconds > 0:
+                    time.sleep(searches_cfg.delay_between_searches_seconds)
+        return out
+
+    results: list[ScrapeSearchResult] = []
+
+    if parallel <= 1:
+        if browser is not None:
+
+            def _run_shared(active: VintedBrowser) -> None:
+                for index, target in enumerate(all_targets):
+                    result = _scrape_target(index, target, active)
+                    if result is not None:
+                        results.append(result)
+                    if (
+                        index < len(all_targets) - 1
+                        and searches_cfg.delay_between_searches_seconds > 0
+                    ):
+                        time.sleep(searches_cfg.delay_between_searches_seconds)
+
+            _run_shared(browser)
+        else:
+            indexed = list(enumerate(all_targets))
+            results.extend(_run_chunk(indexed))
+    else:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        indexed = list(enumerate(all_targets))
+        # Répartit les marques sur N navigateurs (round-robin)
+        chunks: list[list[tuple[int, SearchTarget]]] = [[] for _ in range(parallel)]
+        for i, item in enumerate(indexed):
+            chunks[i % parallel].append(item)
+        chunks = [c for c in chunks if c]
+
+        log.info(
+            "scrape_all_parallel",
+            workers=len(chunks),
+            chunk_sizes=[len(c) for c in chunks],
+        )
+        with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
+            futures = [pool.submit(_run_chunk, chunk) for chunk in chunks]
+            for fut in as_completed(futures):
+                try:
+                    results.extend(fut.result())
+                except Exception as exc:  # noqa: BLE001
+                    log.exception("scrape_all_chunk_failed", error=str(exc)[:200])
 
     log.info(
         "scrape_all_done",
@@ -638,5 +701,6 @@ def scrape_all_configured(
         created=sum(r.items_created for r in results),
         posted=sum(r.items_posted_discord for r in results),
         bootstraps=sum(1 for r in results if r.bootstrap),
+        workers=parallel,
     )
     return results
