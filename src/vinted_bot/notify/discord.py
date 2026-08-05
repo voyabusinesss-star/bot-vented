@@ -670,7 +670,7 @@ class DiscordNotifier:
         self._client = httpx.Client(
             base_url=DISCORD_API,
             headers={
-                "Authorization": f"Bot {self.settings.discord_bot_token}",
+                "Authorization": f"Bot {self.settings.discord_bot_token.strip()}",
                 "Content-Type": "application/json",
             },
             timeout=30.0,

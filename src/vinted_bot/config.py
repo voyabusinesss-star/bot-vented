@@ -196,6 +196,14 @@ class Settings(BaseSettings):
     discord_enabled: bool = True
     discord_bot_token: str = ""
 
+    @field_validator("discord_bot_token", mode="before")
+    @classmethod
+    def _strip_discord_bot_token(cls, value: object) -> object:
+        # Railway / collage .env laisse souvent un \\n → Illegal header value
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
     # Marques suivies (catégorie les-classiques)
     discord_channel_ralph_lauren: str = ""
     discord_channel_nike: str = ""
