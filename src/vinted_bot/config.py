@@ -169,14 +169,14 @@ class Settings(BaseSettings):
         return url
 
     vinted_base_url: str = "https://www.vinted.fr"
-    request_delay_seconds: float = 1.0
+    request_delay_seconds: float = 0.5
     max_retries: int = 3
     scrape_headless: bool = True
     # 1 navigateur sticky = stable sur Railway (monter à 2–3 si plus de RAM)
     scrape_parallel_workers: int = Field(default=1, ge=1, le=20)
-    # Pause entre deux recherches du même worker (2–5 s)
-    scrape_poll_seconds_min: float = Field(default=2.0, ge=0.5)
-    scrape_poll_seconds_max: float = Field(default=5.0, ge=0.5)
+    # Pause minimale entre deux recherches du même worker (quasi temps réel)
+    scrape_poll_seconds_min: float = Field(default=0.3, ge=0.1)
+    scrape_poll_seconds_max: float = Field(default=0.8, ge=0.1)
     # Proxies HTTP/SOCKS (CSV ou lignes) — 1 sticky par worker, rotation au recycle
     scrape_proxy_urls: list[str] = Field(default_factory=list)
 

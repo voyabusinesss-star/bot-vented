@@ -13,17 +13,16 @@
 
 settings:
   enabled: true
-  # Score minimum pour poster (👀 SURVEILLANCE = 60)
-  min_score_to_post: 60
+  # Score bas = flux salon dense (temps réel)
+  min_score_to_post: 45
   # Si true : marques absentes de ce fichier = jamais postées
   require_brand_config: true
-  # Si true : préfère un match catégorie (sinon fallback médian)
-  require_category_match: true
+  # false = plus d'annonces (fallback médian marque)
+  require_category_match: false
   # Titre ambigu → fallback prix médian marque (ne rate pas l'annonce)
   use_category_fallback: true
-  # Ignore les annonces en ligne depuis plus de X minutes (null = pas de limite)
-  # 120 min : tolère la rotation multi-marques sans rater le frais
-  max_listing_age_minutes: 120
+  # Fenêtre large pour ne pas rater le frais entre 2 tours
+  max_listing_age_minutes: 180
   # Filtre enfant (titre + taille uniquement — pas de photos / description)
   reject_kids: true
   # Pas de chaussures sauf marques avec allow_shoes: true (luxe)

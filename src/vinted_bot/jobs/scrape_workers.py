@@ -51,7 +51,7 @@ def partition_targets(
 
 
 def _poll_sleep(min_s: float, max_s: float) -> None:
-    lo = max(0.2, float(min_s))
+    lo = max(0.05, float(min_s))
     hi = max(lo, float(max_s))
     time.sleep(random.uniform(lo, hi))
 
