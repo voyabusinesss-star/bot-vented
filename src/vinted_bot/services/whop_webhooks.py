@@ -590,4 +590,14 @@ def start_whop_webhook_server(
         port=port,
         whop_configured=configured,
     )
+    # Smoke check local — utile dans les logs Railway
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/health", timeout=2
+        ) as resp:
+            log.info("whop_webhook_self_check", status=resp.status)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("whop_webhook_self_check_failed", error=str(exc)[:160])
     return server

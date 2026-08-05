@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
+import time
 from contextlib import suppress
 from typing import Any
 
@@ -175,12 +177,21 @@ async def _dispatch_interaction_safe(
 
 
 def run_discord_interactions() -> None:
-    """Point d'entrée sync (CLI)."""
+    """Point d'entrée sync (CLI).
+
+    Bind HTTP (healthcheck Railway) en premier, puis Discord en arrière-plan
+    avec retry — le process ne meurt pas si le token Discord manque encore.
+    """
     from vinted_bot.services.whop_webhooks import start_whop_webhook_server
 
     log.info("discord_interactions_start")
-    # Bind PORT immédiatement (healthcheck Railway avant Discord / DB)
     whop_server = start_whop_webhook_server()
+    if whop_server is None:
+        raise RuntimeError(
+            "Impossible de binder le port HTTP (PORT / WHOP_WEBHOOK_PORT) — "
+            "requis pour le healthcheck Railway."
+        )
+
     try:
         from alembic import command
         from alembic.config import Config
@@ -189,11 +200,45 @@ def run_discord_interactions() -> None:
         log.info("alembic_upgrade_ok")
     except Exception as exc:  # noqa: BLE001
         log.warning("alembic_upgrade_failed", error=str(exc)[:300])
+
+    def _gateway_forever() -> None:
+        backoff = 5.0
+        while True:
+            try:
+                settings = get_settings()
+                if not settings.discord_bot_token.strip():
+                    log.warning(
+                        "discord_gateway_wait_token",
+                        hint="Définis DISCORD_BOT_TOKEN dans Railway Variables",
+                    )
+                    time.sleep(15.0)
+                    continue
+                asyncio.run(run_discord_gateway())
+                log.warning("discord_gateway_exited_restarting")
+                backoff = 5.0
+            except KeyboardInterrupt:
+                return
+            except Exception as exc:  # noqa: BLE001
+                log.exception(
+                    "discord_gateway_crashed",
+                    error=str(exc)[:300],
+                    retry_in=backoff,
+                )
+                time.sleep(backoff)
+                backoff = min(backoff * 1.5, 60.0)
+
+    gateway_thread = threading.Thread(
+        target=_gateway_forever,
+        name="discord-gateway",
+        daemon=True,
+    )
+    gateway_thread.start()
+
     try:
-        asyncio.run(run_discord_gateway())
+        while True:
+            time.sleep(3600.0)
     except KeyboardInterrupt:
         log.info("discord_interactions_stopped")
     finally:
-        if whop_server is not None:
-            whop_server.shutdown()
-            log.info("whop_webhook_server_stopped")
+        whop_server.shutdown()
+        log.info("whop_webhook_server_stopped")
