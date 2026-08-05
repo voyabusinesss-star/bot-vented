@@ -327,7 +327,7 @@ class Settings(BaseSettings):
     # Max matches mis en file par passage scrape (le worker envoie ensuite)
     private_filter_max_dm_per_scrape: int = Field(default=50, ge=1, le=200)
     # Intervalle dédié scrape filtres privés (secondes) — boucle continue
-    private_filter_scrape_interval_seconds: float = Field(default=20.0, ge=10.0)
+    private_filter_scrape_interval_seconds: float = Field(default=8.0, ge=3.0)
     # Portail liaison Vinted (URL publique HTTPS, ex. ngrok)
     vinted_link_public_url: str = ""
     vinted_link_server_host: str = "0.0.0.0"
@@ -343,7 +343,7 @@ class Settings(BaseSettings):
     # Railway injecte PORT — prioritaire pour exposer le webhook en HTTPS
     port: int | None = Field(default=None, ge=1, le=65535)
     # Délai minimal entre posts Discord (évite 429 sans ralentir le scrape)
-    discord_post_delay_seconds: float = Field(default=0.25, ge=0.0)
+    discord_post_delay_seconds: float = Field(default=0.0, ge=0.0)
     # Salon aperçu bot — flux public ralenti (sans boutons achat/négociation)
     discord_channel_bot_preview: str = ""
     # Intervalle mini entre 2 pings aperçu (secondes) — défaut ~2,5 min

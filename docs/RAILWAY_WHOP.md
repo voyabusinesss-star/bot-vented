@@ -69,10 +69,10 @@ Copier depuis ton `.env` local **toutes** les `DISCORD_CHANNEL_*` (marques, snea
 ```env
 VINTED_BASE_URL=https://www.vinted.fr
 SCRAPE_HEADLESS=true
-REQUEST_DELAY_SECONDS=1.8
+REQUEST_DELAY_SECONDS=0.8
 MAX_RETRIES=3
 ENABLE_SCRAPE=1
-PRIVATE_FILTER_SCRAPE_INTERVAL_SECONDS=20
+PRIVATE_FILTER_SCRAPE_INTERVAL_SECONDS=8
 ```
 
 Astuce Railway : **Variables** → Raw Editor → colle le bloc `DISCORD_CHANNEL_*` de ton `.env`.

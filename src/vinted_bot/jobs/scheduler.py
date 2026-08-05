@@ -26,8 +26,8 @@ def run_scrape_loop(
 ) -> None:
     """
     Tourne indéfiniment :
-    - pulse fréquent des **filtres privés** (alertes DM continues)
-    - marques YAML intercalées **1 par 1** (ne bloque jamais la veille filtres)
+    - pulse fréquent des **filtres privés** (alertes DM)
+    - toutes les marques YAML à chaque tour (spawn continu dès qu'une annonce match)
     """
     settings = get_settings()
     # Worker DM filtres privés (file async — ne bloque jamais le scrape)
@@ -46,9 +46,11 @@ def run_scrape_loop(
     )
     restart_every = max(1, cfg.browser_restart_every_cycles)
     reconnect_delay = max(5.0, cfg.reconnect_delay_seconds)
-    # Combien de marques YAML entre deux pulses filtres
-    # 8 ≈ couverture continue (Nike vêtements + sneakers séparés, etc.)
-    yaml_batch_size = 8
+    # Toutes les marques à chaque tour = spawn continu (pas de file d'attente)
+    yaml_batch_size = max(1, len(active_searches_for_channels(
+        settings.brand_channel_map(),
+        sneaker_map=settings.sneaker_channel_map(),
+    )) or 64)
 
     log.info(
         "loop_start",
@@ -117,7 +119,7 @@ def run_scrape_loop(
                     ran_filters = True
                     cycles_on_browser += 1
 
-                # 2) Une (petite) tranche YAML — jamais le catalogue entier d'un coup
+                # 2) Toutes les marques dues ce cycle (pas de tranche partielle)
                 channel_map = settings.brand_channel_map()
                 sneaker_map = settings.sneaker_channel_map()
                 all_targets = active_searches_for_channels(
@@ -193,16 +195,8 @@ def run_scrape_loop(
                 time.sleep(reconnect_delay)
                 continue
 
-            # Attente courte = flux quasi continu sur tous les salons.
-            # Les filtres privés gardent leur cadence (~20s) sans bloquer les marques.
-            if batch or ran_filters:
-                remaining = max(1.0, float(interval))
-            elif filter_targets:
-                remaining = max(
-                    2.0, filter_interval - (time.monotonic() - last_filter_pulse)
-                )
-            else:
-                remaining = max(2.0, float(interval))
+            # Zéro file d'attente artificielle : enchaîne immédiatement le prochain tour.
+            remaining = max(0.2, float(interval))
             log.info("loop_sleep", seconds=round(remaining, 1), next_cycle=cycle + 1)
             time.sleep(remaining)
     finally:
