@@ -730,43 +730,43 @@ brands:
     # Plafonds relevés : Ami Vinted souvent 50–150 € — anciens max (30–70) vidaient le salon
     items:
       tshirt:
-        max_buy_price: 55
-        average_resell: 90
+        max_buy_price: 100
+        average_resell: 140
         minimum_profit: 25
         rarity: medium
       sweat:
-        max_buy_price: 120
-        average_resell: 180
+        max_buy_price: 180
+        average_resell: 250
         minimum_profit: 40
         rarity: high
       hoodie:
-        max_buy_price: 130
-        average_resell: 200
+        max_buy_price: 180
+        average_resell: 260
         minimum_profit: 45
         rarity: high
       pull:
-        max_buy_price: 110
-        average_resell: 170
+        max_buy_price: 160
+        average_resell: 230
         minimum_profit: 35
         rarity: high
       chemise:
-        max_buy_price: 90
-        average_resell: 140
+        max_buy_price: 120
+        average_resell: 180
         minimum_profit: 30
         rarity: medium
       pantalon:
-        max_buy_price: 120
-        average_resell: 180
+        max_buy_price: 150
+        average_resell: 220
         minimum_profit: 40
         rarity: high
       veste:
-        max_buy_price: 200
-        average_resell: 320
+        max_buy_price: 250
+        average_resell: 380
         minimum_profit: 55
         rarity: high
       default:
-        max_buy_price: 130
-        average_resell: 200
+        max_buy_price: 220
+        average_resell: 300
         minimum_profit: 35
         rarity: medium
 

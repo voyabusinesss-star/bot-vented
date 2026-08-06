@@ -832,49 +832,40 @@ class DiscordNotifier:
             return None
 
         sneaker_ids = set(self.sneaker_map.values())
-        # Salons indémodables / classiques : vêtements uniquement (pas chaussures / objets).
+        # Salons classiques : pas de chaussures. Le reste (sweat, sac Ami, etc.)
+        # va dans le salon marque — le filtre « vêtement only » s'applique au mirror #all.
         if (
             brand_channel_id not in sneaker_ids
             and is_classique_brand(listing.brand)
+            and is_shoe
         ):
-            if is_shoe:
-                log.info(
-                    "discord_skipped_shoe_on_classique",
-                    brand=listing.brand,
-                    vinted_id=listing.vinted_id,
-                    channel_id=brand_channel_id,
-                )
-                return None
-            is_vetement = (
-                category in VETEMENT_CATEGORIES
-                if category
-                else is_clothing_not_shoe(listing.title)
+            log.info(
+                "discord_skipped_shoe_on_classique",
+                brand=listing.brand,
+                vinted_id=listing.vinted_id,
+                channel_id=brand_channel_id,
             )
-            if category == "default":
-                is_vetement = is_clothing_not_shoe(listing.title)
-            if not is_vetement:
-                log.info(
-                    "discord_skipped_non_clothing_on_classique",
-                    brand=listing.brand,
-                    vinted_id=listing.vinted_id,
-                    category=category,
-                    channel_id=brand_channel_id,
-                )
-                return None
+            return None
 
         payload = build_listing_payload(listing)
         self.post_message(brand_channel_id, payload)
 
         all_channel = sanitize_discord_channel_id(self.settings.discord_channel_all)
         # #all-vetement = indémodables vêtements uniquement.
-        # Si on vient de poster sur un salon classique (pas sneakers),
-        # on mirror TOUJOURS — pas de 2e jugement catégorie (sinon écarts salon≠ALL).
+        is_vetement = (
+            category in VETEMENT_CATEGORIES
+            if category and category != "default"
+            else is_clothing_not_shoe(listing.title)
+        )
+        if category == "default":
+            is_vetement = is_clothing_not_shoe(listing.title)
         mirror_all = (
             bool(all_channel)
             and all_channel != brand_channel_id
             and brand_channel_id not in sneaker_ids
             and not is_shoe
             and is_classique_brand(listing.brand)
+            and is_vetement
         )
         if mirror_all:
             try:
