@@ -154,6 +154,41 @@ def test_target_poll_interval_priority_and_override() -> None:
     hot = SearchTarget(
         brand="ami", query="ami", priority="medium", poll_seconds=12.0
     )
-    assert target_poll_interval_seconds(high) == 20.0
-    assert target_poll_interval_seconds(medium) == 45.0
+    assert target_poll_interval_seconds(high) == 15.0
+    assert target_poll_interval_seconds(medium) == 15.0
     assert target_poll_interval_seconds(hot) == 12.0
+
+
+def test_outbox_drip_cap_selects_oldest_global() -> None:
+    """Cap global : les plus anciens d'abord, multi-marques, pas 40/salon."""
+    now = datetime(2026, 8, 6, 12, 0, tzinfo=timezone.utc)
+    rows = [
+        SimpleNamespace(
+            channel_id="brand-a",
+            published_at=now - timedelta(seconds=5),
+            id=3,
+            brand="Adidas",
+        ),
+        SimpleNamespace(
+            channel_id="brand-b",
+            published_at=now - timedelta(seconds=30),
+            id=1,
+            brand="Carhartt",
+        ),
+        SimpleNamespace(
+            channel_id="brand-a",
+            published_at=now - timedelta(seconds=10),
+            id=2,
+            brand="Nike",
+        ),
+        SimpleNamespace(
+            channel_id="all",
+            published_at=now - timedelta(seconds=1),
+            id=4,
+            brand="Dickies",
+        ),
+    ]
+    rows.sort(key=lambda r: (r.published_at, r.id))
+    drip = rows[:3]
+    assert [r.brand for r in drip] == ["Carhartt", "Nike", "Adidas"]
+    assert len(drip) == 3

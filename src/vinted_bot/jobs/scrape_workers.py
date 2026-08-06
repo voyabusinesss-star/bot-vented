@@ -186,6 +186,7 @@ class BrandWorker:
             _target_key(t): 0.0 for t in self.targets
         }
         self._last_scrape_at: dict[tuple[str, str, tuple[int, ...]], float] = {}
+        self._revisit_samples: list[float] = []
 
     def start(self) -> None:
         self._thread = threading.Thread(
@@ -301,6 +302,21 @@ class BrandWorker:
                     cycle_skipped += skipped
                     self._successes += 1
                     self._last_scrape_at[key] = time.monotonic()
+                    if seconds_since is not None:
+                        self._revisit_samples.append(float(seconds_since))
+                        if len(self._revisit_samples) >= 20:
+                            samples = sorted(self._revisit_samples)
+                            self._revisit_samples.clear()
+                            n = len(samples)
+                            p50 = samples[n // 2]
+                            p95 = samples[min(n - 1, int(n * 0.95))]
+                            log.info(
+                                "scrape_revisit_p50_p95",
+                                worker_id=self.worker_id,
+                                p50_seconds=round(p50, 1),
+                                p95_seconds=round(p95, 1),
+                                n=n,
+                            )
                     log.info(
                         "brand_worker_target_done",
                         worker_id=self.worker_id,
@@ -545,7 +561,11 @@ def run_permanent_scrape_pool(
         w.start()
         brand_workers.append(w)
 
-    flush_worker = DiscordFlushWorker(poll_seconds=0.75, buffer_seconds=2.5)
+    flush_worker = DiscordFlushWorker(
+        poll_seconds=0.6,
+        buffer_seconds=0.4,
+        max_messages=3,
+    )
     flush_worker.start()
 
     # Filtre worker : démarre après le 1er brand (évite 2 Chromium au boot)

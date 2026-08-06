@@ -422,7 +422,11 @@ def scrape_search_once(
             )
 
             enqueue_listings_for_discord(announce)
-            flush_discord_outbox(buffer_seconds=0.0)
+            # Drain sync (pas de drip worker) — cap large
+            for _ in range(20):
+                sent = flush_discord_outbox(buffer_seconds=0.0, max_messages=20)
+                if sent <= 0:
+                    break
             posted_ids = [listing.id for listing in announce]
             # flush marque déjà discord_posted_at pour kind=brand
     posted = len(posted_ids)

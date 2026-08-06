@@ -194,12 +194,13 @@ def enqueue_listings_for_discord(listings: Sequence[Listing]) -> list[int]:
 def flush_discord_outbox(
     *,
     buffer_seconds: float = 0.0,
-    max_per_channel: int = 40,
+    max_messages: int = 3,
 ) -> int:
-    """Envoie les pending triés par published_at ASC par salon.
+    """Envoie un drip de pending triés par published_at ASC (multi-marques).
 
     buffer_seconds : n'envoie que les rows avec enqueued_at <= now - buffer
-    (laisse d'autres marques arriver pour mélanger ALL).
+    (laisse d'autres marques arriver pour mélanger).
+    max_messages : cap global par tick (flux continu, anti-vague).
     """
     settings = get_settings()
     if not settings.discord_bot_token.strip():
@@ -211,6 +212,8 @@ def flush_discord_outbox(
 
         cutoff = cutoff - timedelta(seconds=buffer_seconds)
 
+    drip_cap = max(1, int(max_messages))
+
     with session_scope() as session:
         rows = list(
             session.scalars(
@@ -218,11 +221,10 @@ def flush_discord_outbox(
                 .where(DiscordOutbox.status == OUTBOX_STATUS_PENDING)
                 .where(DiscordOutbox.enqueued_at <= cutoff)
                 .order_by(
-                    DiscordOutbox.channel_id.asc(),
                     DiscordOutbox.published_at.asc(),
                     DiscordOutbox.id.asc(),
                 )
-                .limit(500)
+                .limit(200)
             ).all()
         )
         if not rows:
@@ -251,15 +253,16 @@ def flush_discord_outbox(
         if not fresh_rows:
             return 0
 
-        # Cap per channel
-        by_channel: dict[str, list[DiscordOutbox]] = {}
-        for row in fresh_rows:
-            bucket = by_channel.setdefault(row.channel_id, [])
-            if len(bucket) < max_per_channel:
-                bucket.append(row)
-        ordered: list[DiscordOutbox] = []
-        for channel_id in sorted(by_channel.keys()):
-            ordered.extend(by_channel[channel_id])
+        # Drip global chrono — pas de dump par salon
+        ordered = fresh_rows[:drip_cap]
+        pending_left = max(0, len(fresh_rows) - len(ordered))
+        oldest = ordered[0].published_at if ordered else None
+        oldest_wait: float | None = None
+        if oldest is not None:
+            pub = _as_aware(oldest)
+            if pub is not None:
+                oldest_wait = round((_utcnow() - pub).total_seconds(), 1)
+
         listing_ids = {r.listing_id for r in ordered}
         listings = {
             listing.id: listing
@@ -359,22 +362,31 @@ def flush_discord_outbox(
         if posted_listing_ids:
             mark_discord_posted(session, posted_listing_ids)
 
+    log.info(
+        "discord_outbox_drip",
+        sent=len(sent_row_ids),
+        pending_left=pending_left,
+        oldest_wait_seconds=oldest_wait,
+        max_messages=drip_cap,
+    )
     return len(sent_row_ids)
 
 
 class DiscordFlushWorker(threading.Thread):
-    """Thread unique : flush chronologique avec buffer anti-groupement."""
+    """Thread unique : drip chronologique continu (anti-vagues)."""
 
     def __init__(
         self,
         *,
-        poll_seconds: float = 0.75,
-        buffer_seconds: float = 2.5,
+        poll_seconds: float = 0.6,
+        buffer_seconds: float = 0.4,
+        max_messages: int = 3,
         name: str = "discord-flush",
     ) -> None:
         super().__init__(name=name, daemon=True)
         self.poll_seconds = max(0.2, float(poll_seconds))
         self.buffer_seconds = max(0.0, float(buffer_seconds))
+        self.max_messages = max(1, int(max_messages))
         self._stop = threading.Event()
 
     def stop(self) -> None:
@@ -385,16 +397,23 @@ class DiscordFlushWorker(threading.Thread):
             "discord_flush_worker_start",
             poll_seconds=self.poll_seconds,
             buffer_seconds=self.buffer_seconds,
+            max_messages=self.max_messages,
         )
         while not self._stop.is_set():
             try:
-                flush_discord_outbox(buffer_seconds=self.buffer_seconds)
+                flush_discord_outbox(
+                    buffer_seconds=self.buffer_seconds,
+                    max_messages=self.max_messages,
+                )
             except Exception as exc:  # noqa: BLE001
                 log.exception("discord_flush_worker_failed", error=str(exc)[:200])
             self._stop.wait(self.poll_seconds)
-        # Drain remaining without buffer on shutdown
+        # Drain remaining without buffer on shutdown (still drip-sized batches)
         try:
-            flush_discord_outbox(buffer_seconds=0.0)
+            for _ in range(50):
+                sent = flush_discord_outbox(buffer_seconds=0.0, max_messages=10)
+                if sent <= 0:
+                    break
         except Exception as exc:  # noqa: BLE001
             log.warning("discord_flush_drain_failed", error=str(exc)[:160])
         log.info("discord_flush_worker_stopped")

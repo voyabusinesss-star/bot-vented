@@ -86,21 +86,21 @@ def _default_priorities() -> dict[str, PriorityPolicy]:
             extra_passes=0,
             max_items=4,
             max_discord_posts=2,
-            poll_interval_seconds=20.0,
+            poll_interval_seconds=15.0,
         ),
         "medium": PriorityPolicy(
             every_n_cycles=1,
             extra_passes=0,
             max_items=3,
             max_discord_posts=2,
-            poll_interval_seconds=45.0,
+            poll_interval_seconds=15.0,
         ),
         "low": PriorityPolicy(
             every_n_cycles=1,
             extra_passes=0,
             max_items=2,
             max_discord_posts=1,
-            poll_interval_seconds=90.0,
+            poll_interval_seconds=15.0,
         ),
     }
 
@@ -312,8 +312,8 @@ def target_poll_interval_seconds(
     policy = resolve_policy(target, policies)
     raw = policy.poll_interval_seconds
     if raw is None:
-        defaults = {"high": 20.0, "medium": 45.0, "low": 90.0}
-        raw = defaults.get(target.priority, 45.0)
+        defaults = {"high": 15.0, "medium": 15.0, "low": 15.0}
+        raw = defaults.get(target.priority, 15.0)
     return max(5.0, float(raw))
 
 
