@@ -1057,11 +1057,45 @@ def handle_reglement_accept(
         return
 
     guild_id = str(interaction.get("guild_id") or "").strip()
+    if not guild_id:
+        _reglement_reply(
+            client,
+            interaction,
+            "Impossible d'identifier le serveur Discord.",
+            already_deferred=already_deferred,
+        )
+        return
+
     member = interaction.get("member") or {}
     member_roles = {str(r) for r in (member.get("roles") or [])}
-    role_id = client.reglement_verified_role_id()
 
-    if role_id and role_id in member_roles:
+    # Env manquant → retrouver / créer le rôle « Membre » (sinon validation sans accès)
+    role_id = client.reglement_verified_role_id()
+    if not role_id:
+        try:
+            from vinted_bot.services.reglement_gates import ensure_membre_role
+
+            role_id = ensure_membre_role(client, guild_id)
+            log.info("reglement_role_resolved", role_id=role_id, guild_id=guild_id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "reglement_role_resolve_failed",
+                guild_id=guild_id,
+                error=str(exc)[:200],
+            )
+            _reglement_reply(
+                client,
+                interaction,
+                (
+                    "❌ Rôle **Membre** introuvable.\n"
+                    "Un admin doit configurer `DISCORD_ROLE_REGLEMENT_VERIFIED` "
+                    "ou lancer `setup-reglement-gates`."
+                ),
+                already_deferred=already_deferred,
+            )
+            return
+
+    if role_id in member_roles:
         _reglement_reply(
             client,
             interaction,
@@ -1074,49 +1108,37 @@ def handle_reglement_accept(
         client.defer_ephemeral(interaction["id"], interaction["token"])
         already_deferred = True
 
-    if role_id:
-        try:
-            client.add_guild_member_role(guild_id, user_id, role_id)
-        except Exception as exc:  # noqa: BLE001
-            log.warning(
-                "reglement_role_failed",
-                user_id=user_id,
-                role_id=role_id,
-                error=str(exc)[:200],
-            )
-            _reglement_reply(
-                client,
-                interaction,
-                (
-                    "❌ Impossible d'attribuer le rôle pour le moment.\n"
-                    "Contacte un admin — le bot doit avoir **Gérer les rôles** "
-                    "et le rôle doit être **sous** le rôle du bot."
-                ),
-                already_deferred=already_deferred,
-            )
-            return
+    try:
+        client.add_guild_member_role(guild_id, user_id, role_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "reglement_role_failed",
+            user_id=user_id,
+            role_id=role_id,
+            error=str(exc)[:200],
+        )
         _reglement_reply(
             client,
             interaction,
             (
-                "✅ **Règlement accepté** — bienvenue sur Resello !\n\n"
-                "Tu peux maintenant accéder aux salons du serveur."
+                "❌ Impossible d'attribuer le rôle pour le moment.\n"
+                "Contacte un admin — le bot doit avoir **Gérer les rôles** "
+                "et le rôle **Membre** doit être **sous** le rôle du bot."
             ),
             already_deferred=already_deferred,
         )
-        log.info("reglement_accepted", user_id=user_id, role_id=role_id)
         return
 
     _reglement_reply(
         client,
         interaction,
         (
-            "✅ **Règlement accepté** — merci d'avoir pris connaissance "
-            "des règles du serveur."
+            "✅ **Règlement accepté** — bienvenue sur Resello !\n\n"
+            "Tu peux maintenant accéder aux salons du serveur."
         ),
         already_deferred=already_deferred,
     )
-    log.info("reglement_accepted_no_role", user_id=user_id)
+    log.info("reglement_accepted", user_id=user_id, role_id=role_id)
 
 
 def _is_recruitment_staff(interaction: dict[str, Any], client: DiscordInteractionClient) -> bool:
