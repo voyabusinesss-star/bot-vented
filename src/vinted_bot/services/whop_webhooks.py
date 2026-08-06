@@ -246,6 +246,14 @@ def extract_discord_user_id(data: dict[str, Any]) -> int | None:
         data.get("discord_id"),
         data.get("discord_user_id"),
     ]
+    socials = data.get("social_accounts")
+    if isinstance(socials, list):
+        for item in socials:
+            if not isinstance(item, dict):
+                continue
+            service = str(item.get("service") or item.get("provider") or "").lower()
+            if service == "discord":
+                candidates.append(item.get("id") or item.get("account_id"))
     for raw in candidates:
         parsed = _parse_discord_snowflake(raw)
         if parsed is not None:
@@ -313,17 +321,48 @@ def resolve_discord_user_id(
     membership_id: str | None = None,
     settings: Settings | None = None,
 ) -> int | None:
-    """Discord ID depuis le webhook, sinon via API Whop (compte lié)."""
+    """Discord ID depuis le webhook, sinon via API Whop (compte / socials)."""
     found = extract_discord_user_id(data)
     if found is not None:
         return found
     mid = (membership_id or extract_membership_id(data) or "").strip()
-    if not mid:
-        return None
-    enriched = fetch_whop_membership(mid, settings=settings)
-    if not enriched:
-        return None
-    return extract_discord_user_id(enriched)
+    enriched = None
+    if mid:
+        enriched = fetch_whop_membership(mid, settings=settings)
+        if enriched:
+            found = extract_discord_user_id(enriched)
+            if found is not None:
+                return found
+            user = enriched.get("user") if isinstance(enriched, dict) else None
+            user_id = ""
+            if isinstance(user, dict):
+                user_id = str(user.get("id") or "").strip()
+                found = extract_discord_user_id(user)
+                if found is not None:
+                    return found
+            if user_id:
+                profile = fetch_whop_user(user_id, settings=settings)
+                if profile:
+                    found = extract_discord_user_id(profile)
+                    if found is not None:
+                        return found
+                    # social_accounts: [{service: discord, id: "..."}]
+                    socials = profile.get("social_accounts")
+                    if isinstance(socials, list):
+                        for item in socials:
+                            if not isinstance(item, dict):
+                                continue
+                            service = str(
+                                item.get("service") or item.get("provider") or ""
+                            ).lower()
+                            if service != "discord":
+                                continue
+                            found = _parse_discord_snowflake(
+                                item.get("id") or item.get("account_id")
+                            )
+                            if found is not None:
+                                return found
+    return None
 
 
 def extract_email(data: dict[str, Any]) -> str | None:
@@ -393,21 +432,67 @@ def pop_pending_claim(membership_id: str) -> dict[str, Any] | None:
         return _pending_claims.pop(membership_id, None)
 
 
-def create_checkout_url_for_discord(
-    *,
-    tier: str,
-    discord_user_id: int,
-    settings: Settings | None = None,
-) -> tuple[str | None, str | None]:
-    """Crée un checkout Whop avec metadata discord_id.
+def _whop_api_headers(settings: Settings) -> dict[str, str] | None:
+    api_key = str(getattr(settings, "whop_api_key", "") or "").strip()
+    if not api_key:
+        return None
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
 
-    Retourne (url, erreur). Si plan/company manquants → URL checkout statique.
-    """
+
+def resolve_whop_company_id(settings: Settings | None = None) -> str:
+    """WHOP_COMPANY_ID ou dérivé du premier produit configuré."""
+    import httpx
+
+    s = settings or get_settings()
+    configured = str(getattr(s, "whop_company_id", "") or "").strip()
+    if configured:
+        return configured
+    headers = _whop_api_headers(s)
+    if not headers:
+        return ""
+    for field in (
+        "whop_product_pro",
+        "whop_product_starter",
+        "whop_product_proplus",
+    ):
+        pid = str(getattr(s, field, "") or "").strip()
+        if not pid:
+            continue
+        try:
+            response = httpx.get(
+                f"https://api.whop.com/api/v1/products/{pid}",
+                headers=headers,
+                timeout=15.0,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("whop_company_resolve_failed", error=str(exc)[:120])
+            return ""
+        if response.status_code >= 400:
+            continue
+        data = response.json() if response.content else {}
+        company = data.get("company") if isinstance(data, dict) else None
+        if isinstance(company, dict) and company.get("id"):
+            return str(company["id"]).strip()
+        if isinstance(data, dict) and data.get("company_id"):
+            return str(data["company_id"]).strip()
+    return ""
+
+
+def resolve_whop_plan_id(
+    tier: str,
+    *,
+    settings: Settings | None = None,
+) -> str:
+    """Plan Whop pour un tier (env puis API, préfère renewal payant)."""
     import httpx
 
     s = settings or get_settings()
     tier_n = (tier or "").strip().lower()
-    plan_by_tier = {
+    env_map = {
         "starter": str(getattr(s, "whop_plan_starter", "") or "").strip(),
         "pro": str(getattr(s, "whop_plan_pro", "") or "").strip(),
         "premium": str(getattr(s, "whop_plan_pro", "") or "").strip(),
@@ -415,6 +500,119 @@ def create_checkout_url_for_discord(
         "pro+": str(getattr(s, "whop_plan_proplus", "") or "").strip(),
         "elite": str(getattr(s, "whop_plan_proplus", "") or "").strip(),
     }
+    if env_map.get(tier_n):
+        return env_map[tier_n]
+
+    product_map = {
+        "starter": str(getattr(s, "whop_product_starter", "") or "").strip(),
+        "pro": str(getattr(s, "whop_product_pro", "") or "").strip(),
+        "premium": str(getattr(s, "whop_product_pro", "") or "").strip(),
+        "proplus": str(getattr(s, "whop_product_proplus", "") or "").strip(),
+        "pro+": str(getattr(s, "whop_product_proplus", "") or "").strip(),
+        "elite": str(getattr(s, "whop_product_proplus", "") or "").strip(),
+    }
+    product_id = product_map.get(tier_n, "")
+    company_id = resolve_whop_company_id(s)
+    headers = _whop_api_headers(s)
+    if not product_id or not company_id or not headers:
+        return ""
+    try:
+        response = httpx.get(
+            "https://api.whop.com/api/v1/plans",
+            headers=headers,
+            params={
+                "company_id": company_id,
+                "product_ids[]": product_id,
+                "first": 50,
+            },
+            timeout=20.0,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("whop_plan_resolve_failed", error=str(exc)[:120])
+        return ""
+    if response.status_code >= 400:
+        log.warning(
+            "whop_plan_resolve_http",
+            status=response.status_code,
+            body=response.text[:160],
+        )
+        return ""
+    payload = response.json() if response.content else {}
+    plans = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(plans, list) or not plans:
+        return ""
+
+    def _score(plan: dict[str, Any]) -> float:
+        score = 0.0
+        if str(plan.get("plan_type") or "") == "renewal":
+            score += 100.0
+        try:
+            renew = float(plan.get("renewal_price") or 0)
+        except (TypeError, ValueError):
+            renew = 0.0
+        try:
+            initial = float(plan.get("initial_price") or 0)
+        except (TypeError, ValueError):
+            initial = 0.0
+        if renew > 0:
+            score += 50.0 + renew
+        elif initial > 0:
+            score += 20.0 + initial
+        if str(plan.get("visibility") or "") == "visible":
+            score += 10.0
+        elif str(plan.get("visibility") or "") == "archived":
+            score -= 30.0
+        return score
+
+    best = max(
+        (p for p in plans if isinstance(p, dict) and p.get("id")),
+        key=_score,
+        default=None,
+    )
+    return str(best["id"]).strip() if best else ""
+
+
+def fetch_whop_user(
+    user_id: str,
+    *,
+    settings: Settings | None = None,
+) -> dict[str, Any] | None:
+    import httpx
+
+    s = settings or get_settings()
+    headers = _whop_api_headers(s)
+    uid = (user_id or "").strip()
+    if not headers or not uid:
+        return None
+    try:
+        response = httpx.get(
+            f"https://api.whop.com/api/v1/users/{uid}",
+            headers=headers,
+            timeout=15.0,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("whop_user_fetch_failed", error=str(exc)[:120])
+        return None
+    if response.status_code >= 400:
+        return None
+    payload = response.json()
+    return payload if isinstance(payload, dict) else None
+
+
+def create_checkout_url_for_discord(
+    *,
+    tier: str,
+    discord_user_id: int,
+    settings: Settings | None = None,
+) -> tuple[str | None, str | None]:
+    """Crée un checkout Whop avec metadata discord_id (rôle auto au paiement).
+
+    Retourne (url, erreur). Fallback URL statique si l'API échoue.
+    """
+    import httpx
+
+    s = settings or get_settings()
+    tier_n = (tier or "").strip().lower()
     static_by_tier = {
         "starter": str(getattr(s, "subscriptions_checkout_starter", "") or "").strip(),
         "pro": str(getattr(s, "subscriptions_checkout_pro", "") or "").strip(),
@@ -423,20 +621,16 @@ def create_checkout_url_for_discord(
         "pro+": str(getattr(s, "subscriptions_checkout_proplus", "") or "").strip(),
         "elite": str(getattr(s, "subscriptions_checkout_proplus", "") or "").strip(),
     }
-    plan_id = plan_by_tier.get(tier_n, "")
     static_url = static_by_tier.get(tier_n, "")
-    api_key = str(getattr(s, "whop_api_key", "") or "").strip()
-    company_id = str(getattr(s, "whop_company_id", "") or "").strip()
+    headers = _whop_api_headers(s)
+    company_id = resolve_whop_company_id(s)
+    plan_id = resolve_whop_plan_id(tier_n, settings=s)
 
-    if api_key and company_id and plan_id:
+    if headers and company_id and plan_id:
         try:
             response = httpx.post(
                 "https://api.whop.com/api/v1/checkout_configurations",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Accept": "application/json",
-                    "Content-Type": "application/json",
-                },
+                headers=headers,
                 json={
                     "company_id": company_id,
                     "plan_id": plan_id,
@@ -457,6 +651,12 @@ def create_checkout_url_for_discord(
                 or None
             )
             if url:
+                log.info(
+                    "whop_checkout_personalized",
+                    tier=tier_n,
+                    discord_user_id=discord_user_id,
+                    plan_id=plan_id,
+                )
                 return str(url), None
             plan_obj = payload.get("plan") if isinstance(payload, dict) else None
             pid = (
@@ -475,10 +675,19 @@ def create_checkout_url_for_discord(
             "whop_checkout_create_http",
             status=response.status_code,
             body=response.text[:200],
+            plan_id=plan_id,
+            company_id=company_id,
         )
         return static_url or None, f"Whop HTTP {response.status_code}"
 
-    return static_url or None, None
+    missing = []
+    if not headers:
+        missing.append("WHOP_API_KEY")
+    if not company_id:
+        missing.append("company/plan")
+    if not plan_id:
+        missing.append("plan_id")
+    return static_url or None, "missing:" + ",".join(missing) if missing else None
 
 
 def claim_whop_access(

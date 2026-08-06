@@ -128,9 +128,10 @@ def build_subscription_embed_payload(
         f"> {tier.quote}",
         "",
         f"💳 **{tier.price}**",
+        "",
+        "👆 Utilise le bouton **Lien …** en haut du salon "
+        "pour un accès **automatique**.",
     ]
-    if checkout_url:
-        lines.extend(["", f"🔗 [Clique ici pour rejoindre]({checkout_url})"])
 
     embed: dict[str, Any] = {
         "title": tier.title,
@@ -159,9 +160,10 @@ def build_subscriptions_intro_payload() -> dict[str, Any]:
             f"🟢 **Starter — {_short('starter')}**\n"
             f"🔵 **Pro — {_short('pro')} ⭐**\n"
             f"🟣 **Pro+ — {_short('proplus')}**\n\n"
-            "👇 Rejoins via le lien de l’offre, puis clique "
-            "**Activer mon accès** si le rôle n’arrive pas tout seul "
-            "(pas besoin de lier Discord sur Whop)."
+            "**Important :** clique un bouton **Lien …** ci-dessous "
+            "pour rejoindre. Le paiement est lié à ton Discord → "
+            "le rôle est attribué **automatiquement** (sans admin).\n\n"
+            "Si tu as payé via un autre lien : **Activer mon accès**."
         )[:4096],
         "color": EMBED_COLOR,
         "footer": {"text": "Resello · Abonnements"},

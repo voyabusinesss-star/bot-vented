@@ -1113,38 +1113,24 @@ def handle_whop_checkout_button(
             interaction["id"],
             interaction["token"],
             "Lien checkout indisponible pour cette offre. "
-            "Utilise le lien sous la bannière, puis **Activer mon accès**.",
+            "Réessaie dans 1 min ou contacte le support.",
         )
         return
-    note = ""
     if err:
-        note = (
-            "\n_(Lien standard — après paiement, clique **Activer mon accès**.)_"
+        # Fallback lien statique : rôle auto pas garanti
+        client.respond_ephemeral(
+            interaction["id"],
+            interaction["token"],
+            f"🔗 Lien **{tier.upper()}** :\n{url}\n\n"
+            "⚠️ Lien standard (auto-rôle non garanti). "
+            "Après paiement → **Activer mon accès**.",
         )
-    else:
-        # Si URL personnalisée (session), le rôle peut arriver auto via metadata.
-        settings = get_settings()
-        has_plans = any(
-            (
-                getattr(settings, "whop_plan_starter", ""),
-                getattr(settings, "whop_plan_pro", ""),
-                getattr(settings, "whop_plan_proplus", ""),
-            )
-        )
-        if has_plans and "session=" in url:
-            note = (
-                "\nCe lien est lié à ton Discord : le rôle devrait "
-                "arriver après paiement. Sinon → **Activer mon accès**."
-            )
-        else:
-            note = (
-                "\nAprès paiement, si le rôle n’apparaît pas → "
-                "**Activer mon accès** (email Whop)."
-            )
+        return
     client.respond_ephemeral(
         interaction["id"],
         interaction["token"],
-        f"🔗 Ton lien **{tier.upper()}** :\n{url}{note}",
+        f"🔗 Ton lien **{tier.upper()}** (lié à ton Discord) :\n{url}\n\n"
+        "Paie avec ce lien → le rôle Resello est mis **automatiquement**.",
     )
 
 
