@@ -232,12 +232,7 @@ def scrape_search_once(
                 for item in items:
                     from vinted_bot.jobs.db_retention import slim_listing_raw_json
 
-                    # raw slim + 1 photo max : évite de saturer le volume 500Mo
-                    photo_keep = (
-                        list(item.photo_urls[:1])
-                        if getattr(item, "photo_urls", None)
-                        else None
-                    )
+                    # Pas de table photos (volume 500Mo) — URLs restent dans raw slim.
                     listing, created = upsert_listing(
                         session,
                         vinted_id=item.vinted_id,
@@ -248,7 +243,7 @@ def scrape_search_once(
                         brand=item.brand,
                         size=item.size,
                         published_at=item.published_at,
-                        photo_urls=photo_keep,
+                        photo_urls=None,
                         raw_json=slim_listing_raw_json(item.raw_json),
                         source_query=query,
                         record_observation=False,

@@ -140,16 +140,31 @@ def run_db_retention_once() -> dict[str, int]:
         stats["db_mb_before"] = int(before // (1024 * 1024))
 
     with session_scope() as session:
-        res = session.execute(
-            update(Listing)
-            .where(
-                Listing.raw_json.is_not(None),
-                Listing.first_seen_at.is_not(None),
-                Listing.first_seen_at < raw_cutoff,
+        # Null raw_json par petits lots (évite de lock toute la table)
+        raw_nulled = 0
+        for _ in range(30):
+            res = session.execute(
+                text(
+                    """
+                    UPDATE listings
+                    SET raw_json = NULL
+                    WHERE id IN (
+                      SELECT id FROM listings
+                      WHERE raw_json IS NOT NULL
+                        AND first_seen_at IS NOT NULL
+                        AND first_seen_at < :cutoff
+                      ORDER BY id
+                      LIMIT 200
+                    )
+                    """
+                ),
+                {"cutoff": raw_cutoff},
             )
-            .values(raw_json=None)
-        )
-        stats["raw_nulled"] = int(res.rowcount or 0)
+            n = int(res.rowcount or 0)
+            raw_nulled += n
+            if n == 0:
+                break
+        stats["raw_nulled"] = raw_nulled
 
         res = session.execute(
             delete(DiscordOutbox).where(
