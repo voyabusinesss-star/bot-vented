@@ -592,6 +592,11 @@ def run_permanent_scrape_pool(
     )
     flush_worker.start()
 
+    from vinted_bot.jobs.db_retention import DbRetentionWorker
+
+    retention_worker = DbRetentionWorker(interval_seconds=300.0)
+    retention_worker.start()
+
     # Filtre worker : démarre après le 1er brand (évite 2 Chromium au boot)
     time.sleep(45.0 if len(groups) <= 1 else max(5.0, float(len(groups)) * 5.0))
     filter_worker = FilterWorker(
@@ -674,5 +679,6 @@ def run_permanent_scrape_pool(
         filter_worker.stop()
         flush_worker.stop()
         flush_worker.join(timeout=15.0)
+        retention_worker.stop()
         write_scrape_heartbeat(cycle=0, status="pool_stopped")
         log.info("permanent_pool_stopped")

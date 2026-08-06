@@ -111,9 +111,14 @@ def scrape_search_once(
     per_page = max(1, min(max_items, 96))
     owns_browser = browser is None
 
-    with session_scope() as session:
-        run = create_scrape_run(session, query=query)
-        run_id = run.id
+    run_id: int | None = None
+    try:
+        with session_scope() as session:
+            run = create_scrape_run(session, query=query)
+            run_id = run.id
+    except Exception as run_exc:  # noqa: BLE001
+        # Ne jamais bloquer le scrape Discord si scrape_runs est HS.
+        log.warning("scrape_run_create_failed", query=query, error=str(run_exc)[:160])
 
     items: list[SearchItem] = []
     created_count = 0
@@ -225,6 +230,14 @@ def scrape_search_once(
 
             with session_scope() as session:
                 for item in items:
+                    from vinted_bot.jobs.db_retention import slim_listing_raw_json
+
+                    # raw slim + 1 photo max : évite de saturer le volume 500Mo
+                    photo_keep = (
+                        list(item.photo_urls[:1])
+                        if getattr(item, "photo_urls", None)
+                        else None
+                    )
                     listing, created = upsert_listing(
                         session,
                         vinted_id=item.vinted_id,
@@ -235,9 +248,10 @@ def scrape_search_once(
                         brand=item.brand,
                         size=item.size,
                         published_at=item.published_at,
-                        photo_urls=item.photo_urls,
-                        raw_json=item.raw_json,
+                        photo_urls=photo_keep,
+                        raw_json=slim_listing_raw_json(item.raw_json),
                         source_query=query,
+                        record_observation=False,
                     )
                     try:
                         from vinted_bot.services.market_entities import (
@@ -270,29 +284,41 @@ def scrape_search_once(
 
     except Exception as exc:
         log.exception("scrape_search_failed", query=query, error=str(exc))
-        with session_scope() as session:
-            run = session.get(ScrapeRun, run_id)
-            if run is not None:
-                finish_scrape_run(
-                    session,
-                    run,
-                    status="failed",
-                    items_found=len(items),
-                    items_upserted=upserted,
-                    error=str(exc),
-                )
+        if run_id is not None:
+            try:
+                with session_scope() as session:
+                    run = session.get(ScrapeRun, run_id)
+                    if run is not None:
+                        finish_scrape_run(
+                            session,
+                            run,
+                            status="failed",
+                            items_found=len(items),
+                            items_upserted=upserted,
+                            error=str(exc),
+                        )
+            except Exception:  # noqa: BLE001
+                pass
         raise
 
-    with session_scope() as session:
-        run = session.get(ScrapeRun, run_id)
-        assert run is not None
-        finish_scrape_run(
-            session,
-            run,
-            status="success",
-            items_found=len(items),
-            items_upserted=upserted,
-        )
+    if run_id is not None:
+        try:
+            with session_scope() as session:
+                run = session.get(ScrapeRun, run_id)
+                if run is not None:
+                    finish_scrape_run(
+                        session,
+                        run,
+                        status="success",
+                        items_found=len(items),
+                        items_upserted=upserted,
+                    )
+        except Exception as finish_exc:  # noqa: BLE001
+            log.warning(
+                "scrape_run_finish_failed",
+                query=query,
+                error=str(finish_exc)[:160],
+            )
 
     all_vinted_ids = [item.vinted_id for item in items]
 

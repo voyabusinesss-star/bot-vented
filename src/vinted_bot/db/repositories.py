@@ -522,7 +522,12 @@ def mark_discord_posted(session: Session, listing_ids: Sequence[int]) -> None:
 
 
 def create_scrape_run(session: Session, query: str | None = None) -> ScrapeRun:
-    run = ScrapeRun(query=query, status="running")
+    run = ScrapeRun(
+        query=query,
+        status="running",
+        items_found=0,
+        items_upserted=0,
+    )
     session.add(run)
     session.flush()
     return run
