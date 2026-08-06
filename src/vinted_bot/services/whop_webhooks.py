@@ -24,19 +24,40 @@ _pending_lock = threading.Lock()
 _SIGNATURE_TOLERANCE_SECONDS = 300
 
 
+def _plan_id_from_checkout_url(url: str) -> str:
+    """Extrait plan_… depuis une URL checkout Whop (si présent)."""
+    import re
+
+    text = (url or "").strip()
+    if not text:
+        return ""
+    match = re.search(r"(plan_[A-Za-z0-9]+)", text)
+    return match.group(1) if match else ""
+
+
 def product_plan_map(settings: Settings | None = None) -> dict[str, str]:
-    """product_id Whop → plan interne (starter/premium/elite)."""
+    """product_id / plan_id Whop → plan interne (starter/premium/elite)."""
     s = settings or get_settings()
     out: dict[str, str] = {}
-    starter = (s.whop_product_starter or "").strip()
-    pro = (s.whop_product_pro or "").strip()
-    proplus = (s.whop_product_proplus or "").strip()
-    if starter:
-        out[starter] = "starter"
-    if pro:
-        out[pro] = "premium"
-    if proplus:
-        out[proplus] = "elite"
+
+    def _put(raw: str, plan: str) -> None:
+        key = (raw or "").strip()
+        if key:
+            out[key] = plan
+
+    def _get(name: str) -> str:
+        return str(getattr(s, name, "") or "")
+
+    _put(_get("whop_product_starter"), "starter")
+    _put(_get("whop_product_pro"), "premium")
+    _put(_get("whop_product_proplus"), "elite")
+    _put(_get("whop_plan_starter"), "starter")
+    _put(_get("whop_plan_pro"), "premium")
+    _put(_get("whop_plan_proplus"), "elite")
+    # Fallback : IDs plan dérivés des liens checkout Nos offres
+    _put(_plan_id_from_checkout_url(_get("subscriptions_checkout_starter")), "starter")
+    _put(_plan_id_from_checkout_url(_get("subscriptions_checkout_pro")), "premium")
+    _put(_plan_id_from_checkout_url(_get("subscriptions_checkout_proplus")), "elite")
     return out
 
 
@@ -49,6 +70,49 @@ def plan_for_product_id(
     if not pid:
         return None
     return product_plan_map(settings).get(pid)
+
+
+def _whop_hmac_keys(secret: str) -> list[bytes]:
+    """Dérive les clés HMAC possibles (Whop ws_/whsec_ + variantes SDK)."""
+    secret = (secret or "").strip()
+    if not secret:
+        return []
+    keys: list[bytes] = []
+    seen: set[bytes] = set()
+
+    def _add(key: bytes) -> None:
+        if key and key not in seen:
+            seen.add(key)
+            keys.append(key)
+
+    # Toujours tenter le secret brut (certains webhooks Whop signent ainsi).
+    _add(secret.encode("utf-8"))
+
+    if secret.startswith("whsec_"):
+        raw = secret[len("whsec_") :]
+        try:
+            _add(base64.b64decode(raw))
+        except Exception:  # noqa: BLE001
+            pass
+        _add(raw.encode("utf-8"))
+    elif secret.startswith("ws_"):
+        raw = secret[len("ws_") :]
+        try:
+            _add(bytes.fromhex(raw))
+        except ValueError:
+            pass
+        try:
+            _add(base64.b64decode(raw))
+        except Exception:  # noqa: BLE001
+            pass
+        _add(raw.encode("utf-8"))
+    else:
+        try:
+            _add(base64.b64decode(secret))
+        except Exception:  # noqa: BLE001
+            pass
+
+    return keys
 
 
 def verify_whop_signature(
@@ -67,40 +131,44 @@ def verify_whop_signature(
     timestamp = normalized.get("webhook-timestamp") or ""
     signature_header = normalized.get("webhook-signature") or ""
     if not msg_id or not timestamp or not signature_header:
+        log.warning(
+            "whop_webhook_signature_headers_missing",
+            has_id=bool(msg_id),
+            has_ts=bool(timestamp),
+            has_sig=bool(signature_header),
+        )
         return False
     try:
         ts = int(timestamp)
     except ValueError:
         return False
     current = now if now is not None else time.time()
-    if abs(current - ts) > _SIGNATURE_TOLERANCE_SECONDS:
+    skew = abs(current - ts)
+    if skew > _SIGNATURE_TOLERANCE_SECONDS:
+        log.warning(
+            "whop_webhook_signature_skew",
+            skew_seconds=int(skew),
+            tolerance=_SIGNATURE_TOLERANCE_SECONDS,
+        )
         return False
 
-    # Whop : whsec_ (prod) = clé base64 ; ws_ (sandbox) = clé hex après le préfixe.
-    key = secret.encode("utf-8")
-    if secret.startswith("whsec_"):
-        raw = secret[len("whsec_") :]
-        try:
-            key = base64.b64decode(raw)
-        except Exception:  # noqa: BLE001
-            key = secret.encode("utf-8")
-    elif secret.startswith("ws_"):
-        raw = secret[len("ws_") :]
-        try:
-            key = bytes.fromhex(raw)
-        except ValueError:
-            key = secret.encode("utf-8")
-
     signed = f"{msg_id}.{timestamp}.".encode("utf-8") + body
-    expected = base64.b64encode(hmac.new(key, signed, hashlib.sha256).digest()).decode()
+    candidates = [
+        part[3:].strip()
+        for part in signature_header.split(" ")
+        if part.strip().startswith("v1,")
+    ]
+    if not candidates:
+        log.warning("whop_webhook_signature_no_v1")
+        return False
 
-    for part in signature_header.split(" "):
-        part = part.strip()
-        if not part.startswith("v1,"):
-            continue
-        got = part[3:]
-        if hmac.compare_digest(got, expected):
-            return True
+    for key in _whop_hmac_keys(secret):
+        expected = base64.b64encode(
+            hmac.new(key, signed, hashlib.sha256).digest()
+        ).decode()
+        for got in candidates:
+            if hmac.compare_digest(got, expected):
+                return True
     return False
 
 
@@ -114,11 +182,15 @@ def _dig(obj: Any, *path: str) -> Any:
 
 
 def extract_product_id(data: dict[str, Any]) -> str | None:
+    """Retourne un id utilisable pour le mapping (prod_… ou plan_…)."""
     for candidate in (
         _dig(data, "product", "id"),
         _dig(data, "product_id"),
         _dig(data, "plan", "product", "id"),
         _dig(data, "membership", "product", "id"),
+        _dig(data, "plan", "id"),
+        _dig(data, "plan_id"),
+        _dig(data, "membership", "plan", "id"),
     ):
         if candidate:
             return str(candidate).strip()
@@ -142,27 +214,116 @@ def extract_membership_id(data: dict[str, Any]) -> str | None:
     return str(mid).strip() if mid else None
 
 
+def _parse_discord_snowflake(raw: Any) -> int | None:
+    if raw is None or raw == "":
+        return None
+    text = str(raw).strip()
+    if text.lower().startswith("discord:"):
+        text = text.split(":", 1)[-1].strip()
+    # Garde uniquement les chiffres (ex. "<@123>" / "id: 123")
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if not digits:
+        return None
+    try:
+        return int(digits)
+    except (TypeError, ValueError):
+        return None
+
+
 def extract_discord_user_id(data: dict[str, Any]) -> int | None:
-    """Essaie plusieurs formes de payload Whop / metadata."""
+    """Essaie plusieurs formes de payload Whop / metadata / custom fields."""
     candidates: list[Any] = [
         _dig(data, "discord", "id"),
         _dig(data, "discord", "user_id"),
         _dig(data, "discord_account", "id"),
         _dig(data, "user", "discord", "id"),
         _dig(data, "user", "discord_id"),
+        _dig(data, "user", "social_accounts", "discord", "id"),
+        _dig(data, "member", "discord", "id"),
         _dig(data, "metadata", "discord_id"),
         _dig(data, "metadata", "discord_user_id"),
+        _dig(data, "metadata", "discord"),
         data.get("discord_id"),
         data.get("discord_user_id"),
     ]
     for raw in candidates:
-        if raw is None or raw == "":
-            continue
-        try:
-            return int(str(raw).strip())
-        except (TypeError, ValueError):
-            continue
+        parsed = _parse_discord_snowflake(raw)
+        if parsed is not None:
+            return parsed
+
+    # Custom checkout fields (question contenant "discord")
+    responses = data.get("custom_field_responses")
+    if isinstance(responses, list):
+        for item in responses:
+            if not isinstance(item, dict):
+                continue
+            question = str(item.get("question") or "").lower()
+            if "discord" not in question:
+                continue
+            parsed = _parse_discord_snowflake(item.get("answer"))
+            if parsed is not None:
+                return parsed
     return None
+
+
+def fetch_whop_membership(
+    membership_id: str,
+    *,
+    settings: Settings | None = None,
+) -> dict[str, Any] | None:
+    """GET /memberships/{id} — enrichit le webhook si discord_id absent."""
+    import httpx
+
+    s = settings or get_settings()
+    api_key = str(getattr(s, "whop_api_key", "") or "").strip()
+    mid = (membership_id or "").strip()
+    if not api_key or not mid:
+        return None
+    try:
+        response = httpx.get(
+            f"https://api.whop.com/api/v1/memberships/{mid}",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Accept": "application/json",
+            },
+            timeout=15.0,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "whop_membership_fetch_failed",
+            membership_id=mid,
+            error=str(exc)[:160],
+        )
+        return None
+    if response.status_code >= 400:
+        log.warning(
+            "whop_membership_fetch_http",
+            membership_id=mid,
+            status=response.status_code,
+            body=response.text[:160],
+        )
+        return None
+    payload = response.json()
+    return payload if isinstance(payload, dict) else None
+
+
+def resolve_discord_user_id(
+    data: dict[str, Any],
+    *,
+    membership_id: str | None = None,
+    settings: Settings | None = None,
+) -> int | None:
+    """Discord ID depuis le webhook, sinon via API Whop (compte lié)."""
+    found = extract_discord_user_id(data)
+    if found is not None:
+        return found
+    mid = (membership_id or extract_membership_id(data) or "").strip()
+    if not mid:
+        return None
+    enriched = fetch_whop_membership(mid, settings=settings)
+    if not enriched:
+        return None
+    return extract_discord_user_id(enriched)
 
 
 def store_pending_claim(
@@ -415,8 +576,15 @@ def handle_whop_event(
                 "whop_unknown_product",
                 product_id=product_id,
                 membership_id=membership_id,
+                known_ids=sorted(product_plan_map(s).keys()),
             )
             return "unknown_product"
+        if discord_user_id is None:
+            discord_user_id = resolve_discord_user_id(
+                data,
+                membership_id=membership_id,
+                settings=s,
+            )
         if discord_user_id is None:
             if membership_id:
                 store_pending_claim(

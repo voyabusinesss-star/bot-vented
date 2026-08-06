@@ -118,6 +118,26 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Liste les salons concernés sans modifier Discord",
     )
+    grant = sub.add_parser(
+        "grant-subscription",
+        help="Attribue manuellement un plan Whop (starter/pro/proplus) + rôles Discord",
+    )
+    grant.add_argument(
+        "--user-id",
+        required=True,
+        help="Discord user ID (snowflake)",
+    )
+    grant.add_argument(
+        "--plan",
+        required=True,
+        choices=("starter", "pro", "premium", "proplus", "pro+", "elite"),
+        help="Plan à activer",
+    )
+    grant.add_argument(
+        "--username",
+        default=None,
+        help="Pseudo Discord (optionnel, pour la DB)",
+    )
     sub.add_parser(
         "post-detector-apercu",
         help="Poste l'aperçu détecteur dans DISCORD_CHANNEL_NICHES_DEMO",
@@ -732,6 +752,32 @@ def cmd_sync_starter_perms(args, log) -> None:
         f"bloqués outils privés {stats.get('deny_view_denied', 0)} · "
         f"erreurs {stats['errors'] + stats.get('deny_view_errors', 0)}"
     )
+
+
+def cmd_grant_subscription(args, log) -> None:
+    """Active un abo + rôles Discord (filet si webhook Whop raté)."""
+    from vinted_bot.db.user_filters import normalize_plan
+    from vinted_bot.services.whop_webhooks import activate_subscription
+
+    raw_uid = str(getattr(args, "user_id", "") or "").strip()
+    try:
+        user_id = int(raw_uid)
+    except ValueError:
+        print(f"user-id invalide : {raw_uid}")
+        return
+    plan = normalize_plan(str(getattr(args, "plan", "") or ""))
+    username = getattr(args, "username", None)
+    activate_subscription(
+        discord_user_id=user_id,
+        plan=plan,
+        discord_username=username,
+    )
+    log.info(
+        "subscription_granted_manual",
+        discord_user_id=user_id,
+        plan=plan,
+    )
+    print(f"OK — plan {plan} activé + rôles sync pour user {user_id}")
 
 
 def cmd_post_detector_apercu(log) -> None:
@@ -1618,6 +1664,9 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "sync-starter-perms":
         cmd_sync_starter_perms(args, log)
+        return
+    if args.command == "grant-subscription":
+        cmd_grant_subscription(args, log)
         return
     if args.command == "post-detector-apercu":
         cmd_post_detector_apercu(log)

@@ -34,14 +34,32 @@ def test_product_plan_map() -> None:
         whop_product_starter="prod_starter",
         whop_product_pro="prod_pro",
         whop_product_proplus="prod_plus",
+        whop_plan_starter="",
+        whop_plan_pro="plan_pro_checkout",
+        whop_plan_proplus="",
+        subscriptions_checkout_starter="",
+        subscriptions_checkout_pro="",
+        subscriptions_checkout_proplus="",
     )
     assert product_plan_map(settings) == {
         "prod_starter": "starter",
         "prod_pro": "premium",
         "prod_plus": "elite",
+        "plan_pro_checkout": "premium",
     }
     assert plan_for_product_id("prod_pro", settings=settings) == "premium"
+    assert plan_for_product_id("plan_pro_checkout", settings=settings) == "premium"
     assert plan_for_product_id("prod_unknown", settings=settings) is None
+
+
+def test_extract_discord_from_custom_field() -> None:
+    data = {
+        "custom_field_responses": [
+            {"question": "Ton ID Discord", "answer": "123456789012345678"},
+        ]
+    }
+    assert extract_discord_user_id(data) == 123456789012345678
+
 
 
 def test_verify_whop_signature_ok() -> None:
@@ -90,6 +108,23 @@ def test_verify_whop_signature_ws_prefix() -> None:
     msg_id = "msg_ws"
     ts = str(int(time.time()))
     key = bytes.fromhex("ab" * 32)
+    signed = f"{msg_id}.{ts}.".encode("utf-8") + body
+    digest = base64.b64encode(hmac.new(key, signed, hashlib.sha256).digest()).decode()
+    headers = {
+        "webhook-id": msg_id,
+        "webhook-timestamp": ts,
+        "webhook-signature": f"v1,{digest}",
+    }
+    assert verify_whop_signature(body, headers, secret) is True
+
+
+def test_verify_whop_signature_raw_secret_fallback() -> None:
+    """Certaines configs Whop signent avec le secret UTF-8 brut."""
+    secret = "ws_" + "cd" * 32
+    body = b'{"type":"membership.activated","data":{}}'
+    msg_id = "msg_raw"
+    ts = str(int(time.time()))
+    key = secret.encode("utf-8")
     signed = f"{msg_id}.{ts}.".encode("utf-8") + body
     digest = base64.b64encode(hmac.new(key, signed, hashlib.sha256).digest()).decode()
     headers = {
