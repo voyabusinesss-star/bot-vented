@@ -169,7 +169,7 @@ class Settings(BaseSettings):
         return url
 
     vinted_base_url: str = "https://www.vinted.fr"
-    request_delay_seconds: float = 0.5
+    request_delay_seconds: float = 0.2
     max_retries: int = 3
     scrape_headless: bool = True
     # 1 Chromium sticky = stable RAM Railway ; 2+ → OOM / Target crashed
@@ -179,8 +179,8 @@ class Settings(BaseSettings):
     # Alerte Discord (#logs) si aucun heartbeat scrape depuis N secondes
     scrape_silence_alert_seconds: float = Field(default=120.0, ge=30.0)
     # Pause minimale entre deux recherches du même worker (quasi temps réel)
-    scrape_poll_seconds_min: float = Field(default=0.2, ge=0.1)
-    scrape_poll_seconds_max: float = Field(default=0.4, ge=0.1)
+    scrape_poll_seconds_min: float = Field(default=0.05, ge=0.05)
+    scrape_poll_seconds_max: float = Field(default=0.15, ge=0.05)
     # Proxies HTTP/SOCKS (CSV ou lignes) — 1 sticky par worker, rotation au recycle
     scrape_proxy_urls: list[str] = Field(default_factory=list)
 

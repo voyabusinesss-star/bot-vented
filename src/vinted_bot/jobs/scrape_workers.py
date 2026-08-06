@@ -14,6 +14,7 @@ from typing import Sequence
 from vinted_bot.clients.vinted_browser import VintedBrowser
 from vinted_bot.config import get_settings
 from vinted_bot.config_loader import (
+    PRIORITY_RANK,
     SearchTarget,
     active_searches_for_channels,
     load_searches_config,
@@ -146,7 +147,15 @@ def _pick_due_target(
             due.append((when, target))
     if not due:
         return None
-    due.sort(key=lambda item: (item[0], item[1].brand, item[1].query))
+    # High d'abord (fraîcheur salons concurrencés), puis le plus en retard
+    due.sort(
+        key=lambda item: (
+            PRIORITY_RANK.get(item[1].priority, 9),
+            item[0],
+            item[1].brand,
+            item[1].query,
+        )
+    )
     return due[0][1]
 
 

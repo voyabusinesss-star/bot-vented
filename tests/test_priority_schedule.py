@@ -51,10 +51,10 @@ def test_yaml_priorities_loaded() -> None:
     cfg = load_searches_config()
     assert "high" in cfg.priorities
     assert cfg.priorities["high"].every_n_cycles == 1
-    assert cfg.priorities["high"].poll_interval_seconds == 8
-    assert cfg.priorities["medium"].poll_interval_seconds == 8
-    assert cfg.priorities["high"].max_discord_posts == 6
-    assert cfg.priorities["medium"].max_discord_posts == 4
+    assert cfg.priorities["high"].poll_interval_seconds == 0.5
+    assert cfg.priorities["medium"].poll_interval_seconds == 2.0
+    assert cfg.priorities["high"].max_discord_posts == 8
+    assert cfg.priorities["medium"].max_discord_posts == 5
     nike = next(s for s in cfg.searches if s.brand == "nike")
     assert nike.priority == "high"
     columbia = next(s for s in cfg.searches if s.brand == "columbia")

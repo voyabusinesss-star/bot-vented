@@ -314,7 +314,7 @@ def target_poll_interval_seconds(
     if raw is None:
         defaults = {"high": 8.0, "medium": 8.0, "low": 8.0}
         raw = defaults.get(target.priority, 8.0)
-    return max(5.0, float(raw))
+    return max(0.3, float(raw))
 
 
 def select_targets_for_cycle(

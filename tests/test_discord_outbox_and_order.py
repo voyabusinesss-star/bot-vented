@@ -146,11 +146,11 @@ def test_target_poll_interval_priority_and_override() -> None:
     high = SearchTarget(brand="nike", query="nike", priority="high")
     medium = SearchTarget(brand="lacoste", query="lacoste", priority="medium")
     hot = SearchTarget(
-        brand="ami", query="ami", priority="medium", poll_seconds=6.0
+        brand="ami", query="ami", priority="medium", poll_seconds=1.0
     )
-    assert target_poll_interval_seconds(high) == 8.0
-    assert target_poll_interval_seconds(medium) == 8.0
-    assert target_poll_interval_seconds(hot) == 6.0
+    assert target_poll_interval_seconds(high) == 0.5
+    assert target_poll_interval_seconds(medium) == 2.0
+    assert target_poll_interval_seconds(hot) == 1.0
 
 
 def test_outbox_drip_cap_selects_newest_global() -> None:
