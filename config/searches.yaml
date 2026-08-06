@@ -319,8 +319,8 @@ defaults:
   delay_between_searches_seconds: 0
   # Reboucle immédiatement après un tour complet
   loop_interval_seconds: 0.3
-  browser_restart_every_cycles: 40
-  reconnect_delay_seconds: 10
+  browser_restart_every_cycles: 15
+  reconnect_delay_seconds: 8
   slow_cycle_factor: 2.0
   order: newest_first
   catalog_ids: [4, 5]

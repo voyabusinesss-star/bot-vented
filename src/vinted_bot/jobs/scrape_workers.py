@@ -22,12 +22,89 @@ from vinted_bot.config_loader import (
 )
 from vinted_bot.jobs.discord_outbox import DiscordFlushWorker
 from vinted_bot.services.filter_scrape_targets import active_filter_search_targets
-from vinted_bot.services.scrape_heartbeat import write_scrape_heartbeat
+from vinted_bot.services.scrape_heartbeat import (
+    read_scrape_heartbeat,
+    write_scrape_heartbeat,
+)
 from vinted_bot.services.scrape_search import scrape_search_once
 from vinted_bot.utils.logging import get_logger
 from vinted_bot.utils.proxy import assign_proxy_for_worker, rotate_proxy
 
 log = get_logger(__name__)
+_last_silence_alert_at = 0.0
+
+
+def _post_scrape_ops_alert(message: str) -> None:
+    """Ping #logs si le scrape est silencieux (best-effort, rate-limité)."""
+    global _last_silence_alert_at
+    now = time.time()
+    if now - _last_silence_alert_at < 600.0:
+        return
+    settings = get_settings()
+    channel = (settings.discord_channel_logs or "").strip()
+    token = (settings.discord_bot_token or "").strip()
+    if not channel or not token:
+        return
+    try:
+        import httpx
+
+        url = f"https://discord.com/api/v10/channels/{channel}/messages"
+        with httpx.Client(timeout=8.0) as client:
+            resp = client.post(
+                url,
+                headers={
+                    "Authorization": f"Bot {token}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "embeds": [
+                        {
+                            "title": "Scrape silence / instabilité",
+                            "description": message[:1800],
+                            "color": 0xE67E22,
+                        }
+                    ]
+                },
+            )
+        if resp.status_code in (200, 201):
+            _last_silence_alert_at = now
+            log.warning("scrape_silence_alert_sent", status=resp.status_code)
+        else:
+            log.warning(
+                "scrape_silence_alert_failed",
+                status=resp.status_code,
+                body=resp.text[:120],
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("scrape_silence_alert_error", error=str(exc)[:160])
+
+
+def _check_scrape_silence(*, silence_after: float) -> None:
+    data = read_scrape_heartbeat()
+    if not data:
+        _post_scrape_ops_alert(
+            "Aucun heartbeat scrape — workers peut-être down / Chromium bloqué."
+        )
+        return
+    try:
+        age = time.time() - float(data.get("ts") or 0)
+    except (TypeError, ValueError):
+        age = 9999.0
+    if age < silence_after:
+        return
+    status = data.get("status") or "unknown"
+    _post_scrape_ops_alert(
+        f"Pas d'activité scrape depuis **{int(age)}s** "
+        f"(status=`{status}`, cycle=`{data.get('cycle')}`, "
+        f"posted=`{data.get('posted')}`). "
+        "Vérifier Chromium / Railway RAM."
+    )
+    write_scrape_heartbeat(
+        cycle=data.get("cycle"),
+        status="silence_alert",
+        silence_age_s=int(age),
+        posted=data.get("posted"),
+    )
 
 
 def partition_targets(
@@ -238,7 +315,14 @@ class BrandWorker:
                 proxy_url=self.proxy_url,
             )
             self._browser.start()
-            self._browser.warm_up()
+            try:
+                self._browser.warm_up()
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "brand_worker_warmup_soft_fail",
+                    worker_id=self.worker_id,
+                    error=str(exc)[:160],
+                )
             log.info(
                 "brand_worker_browser_ready",
                 worker_id=self.worker_id,
@@ -532,21 +616,28 @@ def run_permanent_scrape_pool(
     settings = get_settings()
     cfg = load_searches_config()
     n_workers = max(1, int(settings.scrape_parallel_workers))
-    if n_workers > 3:
+    # Railway RAM : 1 Chromium brand = stable ; 2+ → OOM / Target crashed
+    if n_workers > 1:
         log.warning(
             "scrape_workers_clamped",
             requested=n_workers,
-            clamped=3,
-            hint="RAM Railway — max 3 Chromium brand workers",
+            clamped=1,
+            hint="Anti-OOM Railway — force 1 brand worker Chromium",
         )
-        n_workers = 3
+        n_workers = 1
     poll_min = float(settings.scrape_poll_seconds_min)
     poll_max = float(settings.scrape_poll_seconds_max)
     proxies = list(settings.scrape_proxy_urls or [])
-    restart_every = max(1, cfg.browser_restart_every_cycles)
-    reconnect = max(5.0, cfg.reconnect_delay_seconds)
+    restart_every = max(1, min(20, cfg.browser_restart_every_cycles))
+    reconnect = max(3.0, min(cfg.reconnect_delay_seconds, 10.0))
     filter_interval = float(
         getattr(settings, "private_filter_scrape_interval_seconds", 8.0) or 8.0
+    )
+    filter_enabled = bool(
+        getattr(settings, "scrape_filter_worker_enabled", False)
+    )
+    silence_after = float(
+        getattr(settings, "scrape_silence_alert_seconds", 120.0) or 120.0
     )
 
     channel_map = settings.brand_channel_map()
@@ -562,6 +653,7 @@ def run_permanent_scrape_pool(
         poll_max=poll_max,
         proxies=len(proxies),
         group_sizes=[len(g) for g in groups],
+        filter_worker=filter_enabled,
     )
     write_scrape_heartbeat(
         cycle=0,
@@ -602,22 +694,27 @@ def run_permanent_scrape_pool(
     retention_worker = DbRetentionWorker(interval_seconds=300.0)
     retention_worker.start()
 
-    # Filtre worker : démarre après le 1er brand (évite 2 Chromium au boot)
-    time.sleep(45.0 if len(groups) <= 1 else max(5.0, float(len(groups)) * 5.0))
-    filter_worker = FilterWorker(
-        proxy_url=assign_proxy_for_worker(proxies, len(groups)) if proxies else None,
-        all_proxies=proxies,
-        headless=headless,
-        poll_min=poll_min,
-        poll_max=poll_max,
-        filter_interval=filter_interval,
-        reconnect_delay=reconnect,
-    )
-    filter_worker.start()
+    filter_worker: FilterWorker | None = None
+    if filter_enabled:
+        # 2e Chromium = risque OOM — démarrage retardé
+        time.sleep(60.0)
+        filter_worker = FilterWorker(
+            proxy_url=assign_proxy_for_worker(proxies, len(groups)) if proxies else None,
+            all_proxies=proxies,
+            headless=headless,
+            poll_min=poll_min,
+            poll_max=poll_max,
+            filter_interval=filter_interval,
+            reconnect_delay=reconnect,
+        )
+        filter_worker.start()
+    else:
+        log.info("filter_worker_disabled", reason="scrape_filter_worker_enabled=false")
 
     try:
         while True:
             time.sleep(20.0)
+            _check_scrape_silence(silence_after=silence_after)
             # Au-dessus du pire cas catalog (CALL_TIMEOUT ~55s × 2 retries + marge).
             # Un seuil trop bas tue le worker EN PLEIN scrape → spiral Chromium/OOM.
             stuck_after = 200.0
@@ -661,7 +758,7 @@ def run_permanent_scrape_pool(
                 )
                 nw.start()
                 brand_workers[idx] = nw
-            if not filter_worker.is_alive():
+            if filter_worker is not None and not filter_worker.is_alive():
                 log.warning("filter_worker_dead_restart")
                 filter_worker.stop()
                 filter_worker = FilterWorker(
@@ -681,7 +778,8 @@ def run_permanent_scrape_pool(
     finally:
         for w in brand_workers:
             w.stop()
-        filter_worker.stop()
+        if filter_worker is not None:
+            filter_worker.stop()
         flush_worker.stop()
         flush_worker.join(timeout=15.0)
         retention_worker.stop()

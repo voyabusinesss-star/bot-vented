@@ -244,6 +244,21 @@ def run_db_retention_once() -> dict[str, int]:
     try:
         eng = get_engine()
         with eng.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            # Tables mortes post-corruption (libèrent le volume 500Mo)
+            for dead in (
+                "listings_dead",
+                "listing_entities_broken_old",
+                "photos_broken_old",
+            ):
+                try:
+                    conn.execute(text(f"DROP TABLE IF EXISTS {dead} CASCADE"))
+                    log.info("db_retention_dropped_orphan", table=dead)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "db_retention_drop_orphan_failed",
+                        table=dead,
+                        error=str(exc)[:120],
+                    )
             for table in (
                 "listings",
                 "photos",

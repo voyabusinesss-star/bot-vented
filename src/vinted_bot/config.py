@@ -172,8 +172,12 @@ class Settings(BaseSettings):
     request_delay_seconds: float = 0.5
     max_retries: int = 3
     scrape_headless: bool = True
-    # Navigateurs sticky (3 = stable RAM Railway ; >4 clampé anti-OOM)
-    scrape_parallel_workers: int = Field(default=2, ge=1, le=20)
+    # 1 Chromium sticky = stable RAM Railway ; 2+ → OOM / Target crashed
+    scrape_parallel_workers: int = Field(default=1, ge=1, le=20)
+    # Worker filtres privés (2e Chromium) — off par défaut anti-OOM Railway
+    scrape_filter_worker_enabled: bool = False
+    # Alerte Discord (#logs) si aucun heartbeat scrape depuis N secondes
+    scrape_silence_alert_seconds: float = Field(default=120.0, ge=30.0)
     # Pause minimale entre deux recherches du même worker (quasi temps réel)
     scrape_poll_seconds_min: float = Field(default=0.2, ge=0.1)
     scrape_poll_seconds_max: float = Field(default=0.4, ge=0.1)

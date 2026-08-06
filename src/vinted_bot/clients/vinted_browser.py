@@ -252,15 +252,23 @@ class VintedBrowser:
         return self._page
 
     def warm_up(self) -> None:
-        self._call("_warm_up_impl")
+        try:
+            self._call("_warm_up_impl")
+        except Exception as exc:  # noqa: BLE001
+            # Warm-up non fatal : un Chromium OOM ne doit pas tuer le worker.
+            log.warning("browser_warmup_failed", error=str(exc)[:160])
 
     def _warm_up_impl(self) -> None:
         self.rate_limiter.wait()
         log.info("browser_warmup", url=self.base_url, proxy=bool(self.proxy_url))
         # commit = plus léger que domcontentloaded (moins de crashes RAM)
-        self.page.goto(self.base_url, wait_until="commit", timeout=min(self.timeout_ms, 30_000))
+        self.page.goto(
+            self.base_url,
+            wait_until="commit",
+            timeout=min(self.timeout_ms, 15_000),
+        )
         try:
-            self.page.wait_for_timeout(800)
+            self.page.wait_for_timeout(400)
         except Exception:  # noqa: BLE001
             pass
         self._dismiss_cookies_if_present()
