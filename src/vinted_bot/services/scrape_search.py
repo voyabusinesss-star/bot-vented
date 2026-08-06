@@ -154,7 +154,8 @@ def scrape_search_once(
                     price_from=price_from,
                     price_to=price_to,
                 ),
-                max_retries=settings.max_retries,
+                # 2 essais max — un hang ne doit pas geler le worker 9 min
+                max_retries=min(2, max(1, int(settings.max_retries or 2))),
                 label=f"catalog:{query}",
             )
             raw_items = parse_catalog_payload(payload, base_url=base)[:max_items]

@@ -21,7 +21,7 @@ from vinted_bot.utils.rate_limit import RateLimiter
 log = get_logger(__name__)
 
 DEFAULT_BASE_URL = "https://www.vinted.fr"
-_CALL_TIMEOUT_S = 180.0
+_CALL_TIMEOUT_S = 55.0
 
 
 def build_catalog_params(

@@ -187,6 +187,13 @@ class BrandWorker:
         }
         self._last_scrape_at: dict[tuple[str, str, tuple[int, ...]], float] = {}
         self._revisit_samples: list[float] = []
+        self._last_activity = time.monotonic()
+
+    def last_activity_age(self) -> float:
+        return max(0.0, time.monotonic() - self._last_activity)
+
+    def _touch(self) -> None:
+        self._last_activity = time.monotonic()
 
     def start(self) -> None:
         self._thread = threading.Thread(
@@ -270,6 +277,7 @@ class BrandWorker:
         )
         while not self._stop.is_set():
             self._cycle += 1
+            self._touch()
             cycle_posted = 0
             cycle_created = 0
             cycle_found = 0
@@ -296,6 +304,7 @@ class BrandWorker:
                         headless=self.headless,
                         max_items=self.max_items,
                     )
+                    self._touch()
                     cycle_created += created
                     cycle_posted += posted
                     cycle_found += found
@@ -334,6 +343,7 @@ class BrandWorker:
                         skipped_deal=skipped,
                     )
                 except Exception as exc:  # noqa: BLE001
+                    self._touch()
                     log.exception(
                         "brand_worker_target_failed",
                         worker_id=self.worker_id,
@@ -343,6 +353,7 @@ class BrandWorker:
                     self._close_browser()
                     time.sleep(self.reconnect_delay)
                     browser = self._ensure_browser()
+                    self._touch()
 
                 interval = target_poll_interval_seconds(target)
                 self._next_run[key] = time.monotonic() + interval
@@ -591,12 +602,21 @@ def run_permanent_scrape_pool(
 
     try:
         while True:
-            time.sleep(30.0)
-            # Relance un brand worker mort
+            time.sleep(20.0)
+            # Relance un brand worker mort OU coincé (hang Playwright)
+            stuck_after = 100.0
             for idx, w in enumerate(list(brand_workers)):
-                if w.is_alive():
+                stuck = w.is_alive() and w.last_activity_age() > stuck_after
+                if w.is_alive() and not stuck:
                     continue
-                log.warning("brand_worker_dead_restart", worker_id=w.worker_id)
+                log.warning(
+                    "brand_worker_dead_restart",
+                    worker_id=w.worker_id,
+                    stuck=stuck,
+                    idle_seconds=(
+                        round(w.last_activity_age(), 1) if stuck else None
+                    ),
+                )
                 w.stop()
                 proxy = assign_proxy_for_worker(proxies, w.worker_id)
                 # Recharge les cibles (salons / yaml peuvent changer)
