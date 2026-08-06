@@ -16,20 +16,22 @@
 
 settings:
   enabled: true
-  # Score bas = flux salon dense (temps réel)
-  min_score_to_post: 45
+  # Score très bas = flux salon dense (temps réel) — assoupli fortement
+  min_score_to_post: 5
   # Si true : marques absentes de ce fichier = jamais postées
-  require_brand_config: true
+  require_brand_config: false
   # false = plus d'annonces (fallback médian marque)
   require_category_match: false
   # Titre ambigu → fallback prix médian marque (ne rate pas l'annonce)
   use_category_fallback: true
-  # Annonces > 8 min = trop vieilles pour Discord (0 délai)
-  max_listing_age_minutes: 8
+  # Fenêtre large : rattrape les drops même si le scrape a lag
+  max_listing_age_minutes: 60
+  # Multiplie tous les max_buy_price (Railway : beaucoup trop de skips prix)
+  max_buy_multiplier: 4.0
   # Filtre enfant (titre + taille uniquement — pas de photos / description)
   reject_kids: true
-  # Pas de chaussures sauf marques avec allow_shoes: true (luxe)
-  reject_shoes_unless_allowed: true
+  # false = autorise chaussures sur toutes les marques scrapées
+  reject_shoes_unless_allowed: false
   # Rejette replica / fake / 1:1
   reject_replicas: true
 

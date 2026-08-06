@@ -355,8 +355,13 @@ class BrandWorker:
                         brand=target.brand,
                         error=str(exc)[:200],
                     )
+                    crashed = "crashed" in str(exc).lower() or "Target closed" in str(exc)
                     self._close_browser()
-                    time.sleep(self.reconnect_delay)
+                    # Crash renderer : restart immédiat ; autre erreur : petite pause
+                    if not crashed:
+                        time.sleep(self.reconnect_delay)
+                    else:
+                        time.sleep(min(2.0, self.reconnect_delay))
                     browser = self._ensure_browser()
                     self._touch()
 

@@ -81,6 +81,8 @@ class DealFilterSettings:
     use_category_fallback: bool = True
     # Ignore les annonces plus vieilles que X minutes (None = pas de limite)
     max_listing_age_minutes: int | None = 30
+    # Multiplie les plafonds max_buy_price (1.0 = YAML tel quel)
+    max_buy_multiplier: float = 1.0
     reject_kids: bool = True
     # Chaussures interdites sauf marques allow_shoes: true (luxe)
     reject_shoes_unless_allowed: bool = True
@@ -241,6 +243,12 @@ def load_deal_filters(path: str | None = None) -> DealFiltersConfig:
     else:
         max_age = max(1, int(max_age_raw))
 
+    try:
+        max_buy_mult = float(settings_raw.get("max_buy_multiplier", 1.0) or 1.0)
+    except (TypeError, ValueError):
+        max_buy_mult = 1.0
+    max_buy_mult = max(1.0, min(max_buy_mult, 20.0))
+
     settings = DealFilterSettings(
         enabled=bool(settings_raw.get("enabled", True)),
         min_score_to_post=int(settings_raw.get("min_score_to_post", 60)),
@@ -248,6 +256,7 @@ def load_deal_filters(path: str | None = None) -> DealFiltersConfig:
         require_category_match=bool(settings_raw.get("require_category_match", True)),
         use_category_fallback=bool(settings_raw.get("use_category_fallback", True)),
         max_listing_age_minutes=max_age,
+        max_buy_multiplier=max_buy_mult,
         reject_kids=bool(settings_raw.get("reject_kids", True)),
         reject_shoes_unless_allowed=bool(
             settings_raw.get("reject_shoes_unless_allowed", True)
@@ -692,11 +701,13 @@ def _score_deal(
     age_minutes: int | None,
     scoring: ScoringConfig,
     category_matched: bool = True,
+    max_buy_override: float | None = None,
 ) -> int:
     """Score /100 calibré pour qu'un gros deal (ex. SI sweat 45→150) ≈ PÉPITE."""
     profit = rule.average_resell - buy_price
     weights = scoring.weights
     total_weight = sum(weights.values()) or 1
+    max_buy = float(max_buy_override) if max_buy_override is not None else rule.max_buy_price
 
     # Marge (0–100) : ratio profit / prix de revente, courbe un peu agressive
     margin_ratio = max(0.0, profit / max(rule.average_resell, 1.0))
@@ -717,9 +728,9 @@ def _score_deal(
     )
     below_market_pts = min(100.0, discount * 130.0)
 
-    # Bonus si clairement sous le max_buy
-    if rule.max_buy_price > 0 and buy_price <= rule.max_buy_price:
-        steal = 1.0 - (buy_price / rule.max_buy_price)
+    # Bonus si clairement sous le max_buy (effectif, avec multiplier)
+    if max_buy > 0 and buy_price <= max_buy:
+        steal = 1.0 - (buy_price / max_buy)
         below_market_pts = min(100.0, below_market_pts + steal * 15.0)
 
     freshness_pts = _freshness_points(age_minutes, scoring)
@@ -875,11 +886,31 @@ def evaluate_deal(
     brand_cfg = cfg.brands.get(brand_key) or cfg.brands.get(normalize_brand(brand))
 
     if brand_cfg is None:
-        return _reject(
-            reason="brand_not_configured",
+        if cfg.settings.require_brand_config:
+            return _reject(
+                reason="brand_not_configured",
+                brand_key=brand_key,
+                brand_display=brand or brand_key,
+                buy_price=buy_price,
+                age_minutes=age_minutes,
+            )
+        # Marque absente du YAML : on poste quand même (flux salon dense)
+        return DealEvaluation(
+            should_post=True,
+            score=max(cfg.settings.min_score_to_post, 50),
+            level="surveillance",
+            level_label=DEAL_LEVEL_LABELS["surveillance"],
             brand_key=brand_key,
-            brand_display=brand or brand_key,
+            brand_display=brand or brand_key or "—",
+            category=None,
+            category_label=None,
             buy_price=buy_price,
+            average_resell=buy_price,
+            estimated_profit=0.0,
+            max_buy_price=buy_price,
+            minimum_profit=0.0,
+            rarity=None,
+            reason="ok_unconfigured_brand",
             age_minutes=age_minutes,
         )
 
@@ -903,11 +934,12 @@ def evaluate_deal(
             age_minutes=age_minutes,
         )
 
+    effective_max_buy = rule.max_buy_price * float(cfg.settings.max_buy_multiplier)
     estimated_profit = rule.average_resell - buy_price
 
-    # Hard-reject uniquement si prix d'achat > max configuré.
+    # Hard-reject uniquement si prix d'achat > max configuré (× multiplier).
     # Pas de filtre sur la marge estimée (revente − prix).
-    if buy_price > rule.max_buy_price:
+    if buy_price > effective_max_buy:
         return DealEvaluation(
             should_post=False,
             score=0,
@@ -920,7 +952,7 @@ def evaluate_deal(
             buy_price=buy_price,
             average_resell=rule.average_resell,
             estimated_profit=estimated_profit,
-            max_buy_price=rule.max_buy_price,
+            max_buy_price=effective_max_buy,
             minimum_profit=rule.minimum_profit,
             rarity=rule.rarity,
             reason="price_above_max",
@@ -934,6 +966,7 @@ def evaluate_deal(
         age_minutes=age_minutes,
         scoring=cfg.scoring,
         category_matched=not used_fallback,
+        max_buy_override=effective_max_buy,
     )
     level = _level_for_score(score, cfg.scoring)
     should_post = score >= cfg.settings.min_score_to_post and level != "skip"
@@ -950,7 +983,7 @@ def evaluate_deal(
         buy_price=buy_price,
         average_resell=rule.average_resell,
         estimated_profit=estimated_profit,
-        max_buy_price=rule.max_buy_price,
+        max_buy_price=effective_max_buy,
         minimum_profit=rule.minimum_profit,
         rarity=rule.rarity,
         reason=("ok_fallback" if used_fallback else "ok") if should_post else "score_too_low",

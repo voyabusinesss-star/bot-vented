@@ -61,11 +61,12 @@ def test_evaluate_pepite_stone_island() -> None:
 
 
 def test_evaluate_reject_price_above_max_without_margin_bypass() -> None:
-    # Prix > max → reject (même si on ne regarde plus la marge)
+    # Prix > max×multiplier → reject (même si on ne regarde plus la marge)
+    # max polo RL = 25 × 4.0 = 100 → 150 € reste au-dessus
     deal = evaluate_deal(
         brand="Ralph Lauren",
         title="Polo Ralph Lauren",
-        price_cents=4500,  # 45€ > max polo 25
+        price_cents=15000,
         raw_json={"created_at_ts": datetime.now(timezone.utc).timestamp()},
     )
     assert deal.should_post is False
@@ -125,13 +126,14 @@ def test_replica_rejected() -> None:
 
 
 def test_evaluate_reject_unconfigured_brand() -> None:
+    # require_brand_config=false → marques hors YAML passent quand même
     deal = evaluate_deal(
         brand="Puma",
         title="Sweat Puma",
         price_cents=1000,
     )
-    assert deal.should_post is False
-    assert deal.reason == "brand_not_configured"
+    assert deal.should_post is True
+    assert deal.reason == "ok_unconfigured_brand"
 
 
 def test_kids_xl_xxl_adult_kept() -> None:
@@ -182,16 +184,16 @@ def test_shoes_rejected_for_classic_brands() -> None:
     assert is_shoe_listing("Baskets Adidas Samba") is True
     assert is_shoe_listing("Hoodie Nike Tech") is False
 
-    # Marques classiques sans allow_shoes (ex. Carhartt)
+    # reject_shoes_unless_allowed=false → chaussures classiques autorisées
     deal = evaluate_deal(
         brand="Carhartt",
         title="Baskets Carhartt",
-        price_cents=5000,
+        price_cents=2500,
         size="42",
         raw_json={"created_at_ts": datetime.now(timezone.utc).timestamp()},
     )
-    assert deal.should_post is False
-    assert deal.reason == "shoes_not_allowed"
+    assert deal.reason != "shoes_not_allowed"
+    assert deal.should_post is True
 
 
 def test_shoes_only_rejects_clothing() -> None:
@@ -233,8 +235,8 @@ def test_shoes_allowed_for_luxury() -> None:
 
 
 def test_evaluate_reject_too_old() -> None:
-    # max_listing_age_minutes = 8 dans deal_filters.yaml
-    old_ts = (datetime.now(timezone.utc) - timedelta(minutes=15)).timestamp()
+    # max_listing_age_minutes = 60 dans deal_filters.yaml
+    old_ts = (datetime.now(timezone.utc) - timedelta(minutes=90)).timestamp()
     deal = evaluate_deal(
         brand="Stone Island",
         title="Sweat Stone Island vintage",

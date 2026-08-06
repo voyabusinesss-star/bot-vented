@@ -386,19 +386,74 @@ class VintedBrowser:
         self, params: list[tuple[str, str]]
     ) -> dict[str, Any] | None:
         api_url = f"{self.base_url}/api/v2/catalog/items?{urlencode(params)}"
-        result = self.page.evaluate(
-            """async (url) => {
-                const res = await fetch(url, {
-                    headers: { 'Accept': 'application/json' },
-                    credentials: 'include'
-                });
-                if (!res.ok) {
-                    return { __error: res.status, __body: await res.text() };
-                }
-                return await res.json();
-            }""",
-            api_url,
-        )
+        # Prefer APIRequestContext: same cookies as the page, but no renderer.
+        # page.evaluate(fetch) is the main "Target crashed" source on Railway RAM.
+        result = self._fetch_catalog_via_request(api_url)
+        if result is not None:
+            return result
+        return self._fetch_catalog_via_evaluate(api_url)
+
+    def _fetch_catalog_via_request(self, api_url: str) -> dict[str, Any] | None:
+        if self._context is None:
+            return None
+        try:
+            response = self._context.request.get(
+                api_url,
+                headers={"Accept": "application/json"},
+                timeout=min(self.timeout_ms, 30_000),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("catalog_request_failed", error=str(exc)[:160])
+            return None
+        try:
+            status = int(response.status)
+            if status != 200:
+                body = ""
+                try:
+                    body = str(response.text())[:300]
+                except Exception:  # noqa: BLE001
+                    pass
+                log.warning("catalog_fetch_failed", status=status, body=body, via="request")
+                if status in {429, 403} or "rate_limit" in body.lower():
+                    penalty = 45.0 if status == 429 else 90.0
+                    self.rate_limiter.penalize(penalty)
+                    log.warning(
+                        "catalog_rate_limit_backoff",
+                        status=status,
+                        penalty_seconds=penalty,
+                    )
+                return None
+            data = response.json()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("catalog_request_parse_failed", error=str(exc)[:160])
+            return None
+        if not isinstance(data, dict):
+            return None
+        if "items" not in data and "catalog_items" not in data:
+            return None
+        return data
+
+    def _fetch_catalog_via_evaluate(self, api_url: str) -> dict[str, Any] | None:
+        try:
+            result = self.page.evaluate(
+                """async (url) => {
+                    const res = await fetch(url, {
+                        headers: { 'Accept': 'application/json' },
+                        credentials: 'include'
+                    });
+                    if (!res.ok) {
+                        return { __error: res.status, __body: await res.text() };
+                    }
+                    return await res.json();
+                }""",
+                api_url,
+            )
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc)
+            log.warning("catalog_evaluate_failed", error=msg[:160])
+            if "crashed" in msg.lower() or "Target closed" in msg:
+                self._recreate_page_after_crash()
+            raise
         if not isinstance(result, dict):
             return None
         if result.get("__error"):
@@ -408,6 +463,7 @@ class VintedBrowser:
                 "catalog_fetch_failed",
                 status=status,
                 body=body,
+                via="evaluate",
             )
             if status in {429, 403} or "rate_limit" in body.lower():
                 penalty = 45.0 if status == 429 else 90.0
@@ -421,6 +477,46 @@ class VintedBrowser:
         if "items" not in result and "catalog_items" not in result:
             return None
         return result
+
+    def _recreate_page_after_crash(self) -> None:
+        """Recrée page/context après un crash renderer (sans tuer tout Playwright)."""
+        log.warning("browser_page_recreate_after_crash")
+        try:
+            if self._page is not None:
+                try:
+                    self._page.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            if self._context is not None:
+                try:
+                    self._context.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            if self._browser is None:
+                return
+            context_kwargs: dict[str, Any] = {
+                "locale": "fr-FR",
+                "viewport": {"width": 1280, "height": 900},
+                "user_agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/122.0.0.0 Safari/537.36"
+                ),
+            }
+            from vinted_bot.clients.playwright_browser import apply_vinted_stealth
+
+            self._context = self._browser.new_context(**context_kwargs)
+            apply_vinted_stealth(self._context)
+            self._page = self._context.new_page()
+            self._page.set_default_timeout(self.timeout_ms)
+            try:
+                self._warm_up_impl()
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception as exc:  # noqa: BLE001
+            log.warning("browser_page_recreate_failed", error=str(exc)[:160])
+            self._page = None
+            self._context = None
 
 
 @contextmanager
