@@ -66,8 +66,9 @@ MIN_MOSAIC_PHOTOS = 6
 MAX_MOSAIC_PHOTOS = 10  # limite Discord embeds / message
 # Ne jamais oublier une fiche déjà postée (anti-repost)
 MAX_POSTED_FICHES_KEPT = 5000
-MAX_SKIPPED_FICHES_KEPT = 80
-FICHES_SKIP_TTL_HOURS = 36.0
+# Niches examinées (échec / inéligible) : ne pas re-brûler pendant longtemps
+MAX_SKIPPED_FICHES_KEPT = 2000
+FICHES_SKIP_TTL_HOURS = 720.0  # 30 jours
 MIN_FICHE_LISTINGS = max(MIN_PUBLISH_LISTINGS, 8)
 MIN_FICHE_SELLERS = max(MIN_NICHE_SELLERS, 2)
 MIN_FICHE_SCORE = PUBLISH_MIN_SCORE
@@ -367,22 +368,32 @@ def fiche_cooldown_remaining_seconds(*, develop_paced: bool = False) -> float:
     return max(0.0, remaining)
 
 
-def _validated_niche_keys(*, lookback_hours: float = 168.0) -> list[tuple[str, float, str]]:
-    """Uniquement les niches déjà POSTÉES par le 🧠 détecteur (posted=True)."""
-    cutoff = _utcnow() - timedelta(hours=lookback_hours)
+def _validated_niche_keys(
+    *,
+    lookback_hours: float | None = None,
+) -> list[tuple[str, float, str]]:
+    """Niches déjà POSTÉES par le 🧠 détecteur, pas encore fichées.
+
+    Source : historique ``opportunity_history`` (posted=True) + checkpoint
+    ``market:opp:posted_keys`` (filet si la row a > lookback / trim).
+    Pas de fenêtre 7j : sinon une niche détectée mais jamais fichée est perdue.
+    """
+    from vinted_bot.services.opportunity_engine import _load_recently_posted_keys
+
     with session_scope() as session:
-        rows = list(
-            session.scalars(
-                select(OpportunityHistory)
-                .where(OpportunityHistory.detected_at >= cutoff)
-                .where(OpportunityHistory.posted.is_(True))
-                .order_by(
-                    OpportunityHistory.score.desc(),
-                    OpportunityHistory.detected_at.desc(),
-                )
-                .limit(200)
-            ).all()
+        stmt = (
+            select(OpportunityHistory)
+            .where(OpportunityHistory.posted.is_(True))
+            .order_by(
+                OpportunityHistory.score.desc(),
+                OpportunityHistory.detected_at.desc(),
+            )
+            .limit(500)
         )
+        if lookback_hours is not None and lookback_hours > 0:
+            cutoff = _utcnow() - timedelta(hours=float(lookback_hours))
+            stmt = stmt.where(OpportunityHistory.detected_at >= cutoff)
+        rows = list(session.scalars(stmt).all())
         materialised = [
             (
                 (row.niche_key or "").strip(),
@@ -391,6 +402,7 @@ def _validated_niche_keys(*, lookback_hours: float = 168.0) -> list[tuple[str, f
             )
             for row in rows
         ]
+
     best: dict[str, tuple[float, str]] = {}
     for key, score, name in materialised:
         if not key:
@@ -398,8 +410,34 @@ def _validated_niche_keys(*, lookback_hours: float = 168.0) -> list[tuple[str, f
         prev = best.get(key)
         if prev is None or score > prev[0]:
             best[key] = (score, name)
-    ordered = sorted(best.items(), key=lambda kv: kv[1][0], reverse=True)
-    return [(k, sc, name) for k, (sc, name) in ordered]
+
+    # Filet : clés détecteur postées (checkpoint) absentes de l'historique chargé
+    for key, _at in _load_recently_posted_keys().items():
+        nk = str(key or "").strip()
+        if not nk or nk in best:
+            continue
+        snap = _snapshot_for_key(nk)
+        score = float(getattr(snap, "score", None) or 0.0) if snap else 0.0
+        name = nk
+        if snap is not None:
+            bits = [
+                getattr(snap, "brand_slug", None),
+                getattr(snap, "model_slug", None),
+                getattr(snap, "category_slug", None),
+            ]
+            label = " ".join(str(b) for b in bits if b).strip()
+            if label:
+                name = label[:120]
+        best[nk] = (score, name)
+
+    # Exclure dès la source les fiches déjà postées (évite churn pick)
+    already_fiched = _load_posted_fiche_keys()
+    ordered = sorted(
+        ((k, sc, name) for k, (sc, name) in best.items() if k not in already_fiched),
+        key=lambda kv: kv[1],
+        reverse=True,
+    )
+    return [(k, sc, name) for k, sc, name in ordered]
 
 
 def _buyer_protection_eur(article_eur: float) -> float:
@@ -1094,13 +1132,13 @@ def pick_best_detector_opportunity(
     force: bool = False,
     exclude_keys: set[str] | None = None,
 ) -> tuple[Opportunity, NicheSnapshot] | None:
-    """Meilleure niche déjà publiée par le détecteur, pas encore fichée."""
+    """Meilleure niche déjà publiée par le détecteur, pas encore fichée / examinée."""
     posted_fiches = _load_posted_fiche_keys()
     skipped = {} if force else _load_skipped_fiche_keys()
     exclude = exclude_keys or set()
     validated = _validated_niche_keys()
     if not validated:
-        log.info("fiche_waiting_for_detector", reason="no_posted_niches_in_history")
+        log.info("fiche_waiting_for_detector", reason="no_posted_niches_pending_fiche")
         return None
 
     for niche_key, _score, _name in validated:
@@ -1110,17 +1148,42 @@ def pick_best_detector_opportunity(
             continue
         snap = _snapshot_for_key(niche_key)
         if snap is None:
+            if not force:
+                _mark_fiche_skipped(niche_key, reason="no_snapshot")
             continue
-        if int(snap.listing_count or 0) < MIN_FICHE_LISTINGS:
+        listings_n = int(snap.listing_count or 0)
+        sellers_n = int(snap.unique_sellers or 0)
+        if listings_n < MIN_FICHE_LISTINGS:
+            if not force:
+                _mark_fiche_skipped(
+                    niche_key,
+                    reason=f"listings_low:{listings_n}<{MIN_FICHE_LISTINGS}",
+                )
             continue
-        if int(snap.unique_sellers or 0) < MIN_FICHE_SELLERS:
+        if sellers_n < MIN_FICHE_SELLERS:
+            if not force:
+                _mark_fiche_skipped(
+                    niche_key,
+                    reason=f"sellers_low:{sellers_n}<{MIN_FICHE_SELLERS}",
+                )
             continue
         # Niches déjà postées par le détecteur : score historique + ignore avoid.
         op = snapshot_to_opportunity(snap, for_fiche=True)
         if op is None or op.score < MIN_FICHE_SCORE:
+            if not force:
+                score_v = float(getattr(op, "score", 0.0) or 0.0) if op else 0.0
+                _mark_fiche_skipped(
+                    niche_key,
+                    reason=f"score_low:{score_v:.1f}<{MIN_FICHE_SCORE}",
+                )
             continue
         return op, snap
-    log.info("fiche_no_eligible_detector_niche")
+    log.info(
+        "fiche_no_eligible_detector_niche",
+        validated=len(validated),
+        posted_fiches=len(posted_fiches),
+        skipped=len(skipped),
+    )
     return None
 
 

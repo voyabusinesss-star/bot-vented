@@ -56,7 +56,9 @@ case "$ROLE" in
     ;;
 
   niches)
-    # Plan free : TOUJOURS detector d'abord (fenêtre ~35 min), puis 1 tentative fiche.
+    # Boucle : DETECTOR (fenêtre) → FICHES (1 niche détectée, jamais repostée) → pause.
+    # Dedup détecteur : market:opp:posted_keys · Dedup fiches : market:fiches:posted_keys
+    # + skipped_keys (niches déjà examinées / inéligibles).
     # 1 Chromium à la fois — scrape public+privé reste sur APP_ROLE=scrape (intact).
     # Cadence cible : ~10 détections Discord / h (cap code) + 1 fiche / h (cooldown).
     DETECTOR_WINDOW_S="${NICHES_DETECTOR_WINDOW_SECONDS:-2100}"   # 35 min
@@ -64,9 +66,9 @@ case "$ROLE" in
     PHASE_PAUSE_S="${NICHES_PHASE_PAUSE_SECONDS:-60}"
     # Deep-dive court pour laisser de la RAM/temps au detector (env override OK)
     export FICHES_DEVELOP_SECONDS="${FICHES_DEVELOP_SECONDS:-900}"
-    echo "[railway] niches: detector ${DETECTOR_WINDOW_S}s → fiche (develop=${FICHES_DEVELOP_SECONDS}s)"
+    echo "[railway] niches loop: detector ${DETECTOR_WINDOW_S}s → fiche (develop=${FICHES_DEVELOP_SECONDS}s) → repeat"
     while true; do
-      echo "[railway] niches: PHASE DETECTOR (fenêtre ${DETECTOR_WINDOW_S}s)"
+      echo "[railway] niches: PHASE DETECTOR (fenêtre ${DETECTOR_WINDOW_S}s, skip déjà postées)"
       deadline=$(( $(date +%s) + DETECTOR_WINDOW_S ))
       cycle=0
       while [ "$(date +%s)" -lt "$deadline" ]; do
@@ -85,7 +87,7 @@ case "$ROLE" in
         echo "[railway] niches: pause detector ${pause}s (Chromium relâché)"
         sleep "$pause"
       done
-      echo "[railway] niches: PHASE FICHES (1 cycle, niches déjà postées par detector)"
+      echo "[railway] niches: PHASE FICHES (1 niche détectée non encore fichée/examinée)"
       uv run vinted-bot fiches-produit --once || true
       echo "[railway] niches: pause ${PHASE_PAUSE_S}s avant retour detector"
       sleep "$PHASE_PAUSE_S"
