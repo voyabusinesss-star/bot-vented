@@ -118,8 +118,9 @@ searches:
     enabled: true
   - brand: ami paris
     query: ami paris
-    # Ami Paris + AMI
+    # Ami Paris + AMI — vêtements F/H explicites
     brand_ids: [7228770, 4615783]
+    catalog_ids: [4, 5]
     priority: high
     enabled: true
   - brand: the kooples
