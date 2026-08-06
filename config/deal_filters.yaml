@@ -30,8 +30,8 @@ settings:
   max_buy_multiplier: 4.0
   # Filtre enfant (titre + taille uniquement — pas de photos / description)
   reject_kids: true
-  # false = autorise chaussures sur toutes les marques scrapées
-  reject_shoes_unless_allowed: false
+  # true = chaussures seulement si allow_shoes / shoes_only (Nike→pépites, Carhartt→non)
+  reject_shoes_unless_allowed: true
   # Rejette replica / fake / 1:1
   reject_replicas: true
 

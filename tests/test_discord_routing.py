@@ -68,6 +68,8 @@ def test_is_allowed_brand() -> None:
 
 def test_nike_clothing_vs_sneakers_routing() -> None:
     """Nike vêtement → indémodables ; Nike chaussure → Pépites Sneakers."""
+    from vinted_bot.notify.discord import channel_allows_listing
+
     clothing = {"nike": "nike-vetements", "carhartt": "carhartt-ch"}
     sneakers = {"nike": "nike-sneakers", "jordan": "jordan-ch"}
     assert (
@@ -77,6 +79,19 @@ def test_nike_clothing_vs_sneakers_routing() -> None:
     assert (
         route_channel("Nike", clothing, sneaker_map=sneakers, is_shoe=True)
         == "nike-sneakers"
+    )
+    sneaker_ids = set(sneakers.values())
+    assert channel_allows_listing(
+        channel_id="nike-vetements", is_shoe=False, sneaker_channel_ids=sneaker_ids
+    )
+    assert not channel_allows_listing(
+        channel_id="nike-vetements", is_shoe=True, sneaker_channel_ids=sneaker_ids
+    )
+    assert channel_allows_listing(
+        channel_id="nike-sneakers", is_shoe=True, sneaker_channel_ids=sneaker_ids
+    )
+    assert not channel_allows_listing(
+        channel_id="jordan-ch", is_shoe=False, sneaker_channel_ids=sneaker_ids
     )
     assert belongs_in_all_vetement(
         "Nike",

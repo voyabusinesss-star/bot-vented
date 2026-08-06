@@ -16,10 +16,7 @@ from vinted_bot.db.repositories import mark_discord_posted
 from vinted_bot.db.session import session_scope
 from vinted_bot.notify.discord import (
     DiscordNotifier,
-    belongs_in_all_vetement,
     build_listing_payload,
-    is_classique_brand,
-    route_channel,
 )
 from vinted_bot.utils.logging import get_logger
 
@@ -101,22 +98,22 @@ def _as_aware(dt: datetime | None) -> datetime | None:
 
 def resolve_discord_channels(listing: Listing) -> tuple[str | None, str | None, bool]:
     """Retourne (brand_channel_id, all_channel_id_or_none, is_shoe)."""
-    from vinted_bot.services.deal_filter import is_shoe_listing
+    from vinted_bot.notify.discord import (
+        belongs_in_all_vetement,
+        channel_allows_listing,
+        get_deal_evaluation,
+        listing_is_shoe,
+        route_channel,
+        sanitize_discord_channel_id,
+    )
 
     settings = get_settings()
     deal = None
     try:
-        from vinted_bot.notify.discord import get_deal_evaluation
-
         deal = get_deal_evaluation(listing)
     except Exception:  # noqa: BLE001
         deal = None
-    category = getattr(deal, "category", None) if deal is not None else None
-    is_shoe = False
-    if category in ("chaussure", "dunk", "air_force_1"):
-        is_shoe = True
-    elif is_shoe_listing(listing.title):
-        is_shoe = True
+    is_shoe = listing_is_shoe(listing, deal=deal)
 
     brand_channel_id = route_channel(
         listing.brand,
@@ -124,14 +121,11 @@ def resolve_discord_channels(listing: Listing) -> tuple[str | None, str | None, 
         sneaker_map=settings.sneaker_channel_map(),
         is_shoe=is_shoe,
     )
-    if not brand_channel_id:
-        return None, None, is_shoe
-
     sneaker_ids = set(settings.sneaker_channel_map().values())
-    if (
-        brand_channel_id not in sneaker_ids
-        and is_classique_brand(listing.brand)
-        and is_shoe
+    if not channel_allows_listing(
+        channel_id=brand_channel_id,
+        is_shoe=is_shoe,
+        sneaker_channel_ids=sneaker_ids,
     ):
         return None, None, is_shoe
 

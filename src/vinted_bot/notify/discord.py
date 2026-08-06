@@ -146,6 +146,7 @@ def route_channel(
     """Retourne le channel marque.
 
     Chaussures → **uniquement** salon sneakers (jamais fallback vêtements).
+    Non-chaussures → **uniquement** salon vêtements/luxe (jamais pépites sneakers).
     """
     normalized = normalize_brand(brand)
     if not normalized:
@@ -165,6 +166,34 @@ def route_channel(
         return None
 
     return _match(channel_map)
+
+
+def listing_is_shoe(listing: Any, *, deal: Any | None = None) -> bool:
+    """Chaussure ? (catégorie deal + titre)."""
+    from vinted_bot.services.deal_filter import is_shoe_listing
+
+    category = getattr(deal, "category", None) if deal is not None else None
+    if category in ("chaussure", "dunk", "air_force_1"):
+        return True
+    title = getattr(listing, "title", None) if listing is not None else None
+    return bool(is_shoe_listing(title))
+
+
+def channel_allows_listing(
+    *,
+    channel_id: str | None,
+    is_shoe: bool,
+    sneaker_channel_ids: set[str],
+) -> bool:
+    """Indémodables/luxe : pas de chaussures. Pépites sneakers : chaussures only."""
+    if not channel_id:
+        return False
+    is_sneaker_channel = channel_id in sneaker_channel_ids
+    if is_shoe and not is_sneaker_channel:
+        return False
+    if (not is_shoe) and is_sneaker_channel:
+        return False
+    return True
 
 
 def is_allowed_brand(
@@ -850,19 +879,8 @@ class DiscordNotifier:
         Si le post marque réussit, on considère l'annonce postée même si #all échoue
         (évite les doublons marque au prochain run).
         """
-        from vinted_bot.services.deal_filter import is_shoe_listing
-
         deal = get_deal_evaluation(listing)
-        category = getattr(deal, "category", None) if deal is not None else None
-        is_shoe = False
-        if category in (
-            "chaussure",
-            "dunk",
-            "air_force_1",
-        ):
-            is_shoe = True
-        elif is_shoe_listing(listing.title):
-            is_shoe = True
+        is_shoe = listing_is_shoe(listing, deal=deal)
 
         brand_channel_id = route_channel(
             listing.brand,
@@ -870,28 +888,23 @@ class DiscordNotifier:
             sneaker_map=self.sneaker_map,
             is_shoe=is_shoe,
         )
-        if not brand_channel_id:
+        sneaker_ids = set(self.sneaker_map.values())
+        if not channel_allows_listing(
+            channel_id=brand_channel_id,
+            is_shoe=is_shoe,
+            sneaker_channel_ids=sneaker_ids,
+        ):
             log.info(
-                "discord_skipped_brand",
+                "discord_skipped_channel_kind_mismatch",
                 brand=listing.brand,
                 vinted_id=listing.vinted_id,
                 is_shoe=is_shoe,
-            )
-            return None
-
-        sneaker_ids = set(self.sneaker_map.values())
-        # Salons classiques : pas de chaussures. Le reste (sweat, sac Ami, etc.)
-        # va dans le salon marque — le filtre « vêtement only » s'applique au mirror #all.
-        if (
-            brand_channel_id not in sneaker_ids
-            and is_classique_brand(listing.brand)
-            and is_shoe
-        ):
-            log.info(
-                "discord_skipped_shoe_on_classique",
-                brand=listing.brand,
-                vinted_id=listing.vinted_id,
                 channel_id=brand_channel_id,
+                reason=(
+                    "shoe_on_clothing_channel"
+                    if is_shoe
+                    else "clothing_on_sneaker_channel"
+                ),
             )
             return None
 

@@ -184,7 +184,7 @@ def test_shoes_rejected_for_classic_brands() -> None:
     assert is_shoe_listing("Baskets Adidas Samba") is True
     assert is_shoe_listing("Hoodie Nike Tech") is False
 
-    # reject_shoes_unless_allowed=false → chaussures classiques autorisées
+    # Marques classiques sans allow_shoes (ex. Carhartt) → pas de chaussures
     deal = evaluate_deal(
         brand="Carhartt",
         title="Baskets Carhartt",
@@ -192,8 +192,8 @@ def test_shoes_rejected_for_classic_brands() -> None:
         size="42",
         raw_json={"created_at_ts": datetime.now(timezone.utc).timestamp()},
     )
-    assert deal.reason != "shoes_not_allowed"
-    assert deal.should_post is True
+    assert deal.should_post is False
+    assert deal.reason == "shoes_not_allowed"
 
 
 def test_shoes_only_rejects_clothing() -> None:
