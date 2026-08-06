@@ -18,7 +18,9 @@ from vinted_bot.config_loader import (
     active_searches_for_channels,
     load_searches_config,
     resolve_policy,
+    target_poll_interval_seconds,
 )
+from vinted_bot.jobs.discord_outbox import DiscordFlushWorker
 from vinted_bot.services.filter_scrape_targets import active_filter_search_targets
 from vinted_bot.services.scrape_heartbeat import write_scrape_heartbeat
 from vinted_bot.services.scrape_search import scrape_search_once
@@ -47,6 +49,40 @@ def partition_targets(
     for i, target in enumerate(ordered):
         buckets[i % n].append(target)
     return [b for b in buckets if b]
+
+
+def _target_key(target: SearchTarget) -> tuple[str, str, tuple[int, ...]]:
+    return (target.brand, target.query, tuple(target.catalog_ids))
+
+
+def _pick_due_target(
+    targets: Sequence[SearchTarget],
+    next_run: dict[tuple[str, str, tuple[int, ...]], float],
+    *,
+    now: float,
+) -> SearchTarget | None:
+    due: list[tuple[float, SearchTarget]] = []
+    for target in targets:
+        key = _target_key(target)
+        when = next_run.get(key, 0.0)
+        if when <= now:
+            due.append((when, target))
+    if not due:
+        return None
+    due.sort(key=lambda item: (item[0], item[1].brand, item[1].query))
+    return due[0][1]
+
+
+def _seconds_until_next(
+    targets: Sequence[SearchTarget],
+    next_run: dict[tuple[str, str, tuple[int, ...]], float],
+    *,
+    now: float,
+) -> float:
+    waits = [next_run.get(_target_key(t), now) - now for t in targets]
+    if not waits:
+        return 1.0
+    return max(0.05, min(waits))
 
 
 def _poll_sleep(min_s: float, max_s: float) -> None:
@@ -102,6 +138,7 @@ def _scrape_target(
         price_to=getattr(target, "price_to", None),
         skip_brand_channel_filter=skip_brand_filter,
         keep_search_text=keep_text,
+        defer_discord=not is_user_filter,
     )
     return (
         result.items_created,
@@ -145,6 +182,10 @@ class BrandWorker:
         self._browser: VintedBrowser | None = None
         self._successes = 0
         self._cycle = 0
+        self._next_run: dict[tuple[str, str, tuple[int, ...]], float] = {
+            _target_key(t): 0.0 for t in self.targets
+        }
+        self._last_scrape_at: dict[tuple[str, str, tuple[int, ...]], float] = {}
 
     def start(self) -> None:
         self._thread = threading.Thread(
@@ -234,49 +275,70 @@ class BrandWorker:
             cycle_skipped = 0
             try:
                 browser = self._ensure_browser()
-                for target in self.targets:
-                    if self._stop.is_set():
-                        break
-                    started = time.monotonic()
-                    try:
-                        created, posted, found, skipped = _scrape_target(
-                            target,
-                            browser=browser,
-                            headless=self.headless,
-                            max_items=self.max_items,
-                        )
-                        cycle_created += created
-                        cycle_posted += posted
-                        cycle_found += found
-                        cycle_skipped += skipped
-                        self._successes += 1
-                        log.info(
-                            "brand_worker_target_done",
-                            worker_id=self.worker_id,
-                            brand=target.brand,
-                            catalog_ids=target.catalog_ids,
-                            duration_seconds=round(time.monotonic() - started, 2),
-                            created=created,
-                            posted=posted,
-                            found=found,
-                            skipped_deal=skipped,
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        log.exception(
-                            "brand_worker_target_failed",
-                            worker_id=self.worker_id,
-                            brand=target.brand,
-                            error=str(exc)[:200],
-                        )
-                        self._close_browser()
-                        time.sleep(self.reconnect_delay)
-                        browser = self._ensure_browser()
+                now = time.monotonic()
+                target = _pick_due_target(self.targets, self._next_run, now=now)
+                if target is None:
+                    wait_s = _seconds_until_next(
+                        self.targets, self._next_run, now=now
+                    )
+                    self._stop.wait(min(wait_s, 2.0))
+                    continue
 
-                    if self._successes >= self.restart_every:
-                        self._recycle_browser(rotate=True)
-                        browser = self._ensure_browser()
+                key = _target_key(target)
+                started = time.monotonic()
+                last = self._last_scrape_at.get(key)
+                seconds_since = (started - last) if last is not None else None
+                try:
+                    created, posted, found, skipped = _scrape_target(
+                        target,
+                        browser=browser,
+                        headless=self.headless,
+                        max_items=self.max_items,
+                    )
+                    cycle_created += created
+                    cycle_posted += posted
+                    cycle_found += found
+                    cycle_skipped += skipped
+                    self._successes += 1
+                    self._last_scrape_at[key] = time.monotonic()
+                    log.info(
+                        "brand_worker_target_done",
+                        worker_id=self.worker_id,
+                        brand=target.brand,
+                        catalog_ids=target.catalog_ids,
+                        duration_seconds=round(time.monotonic() - started, 2),
+                        seconds_since_last_scrape=(
+                            round(seconds_since, 1)
+                            if seconds_since is not None
+                            else None
+                        ),
+                        created=created,
+                        posted=posted,
+                        found=found,
+                        skipped_deal=skipped,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.exception(
+                        "brand_worker_target_failed",
+                        worker_id=self.worker_id,
+                        brand=target.brand,
+                        error=str(exc)[:200],
+                    )
+                    self._close_browser()
+                    time.sleep(self.reconnect_delay)
+                    browser = self._ensure_browser()
 
-                    _poll_sleep(self.poll_min, self.poll_max)
+                interval = target_poll_interval_seconds(target)
+                self._next_run[key] = time.monotonic() + interval
+
+                if self._successes >= self.restart_every:
+                    self._recycle_browser(rotate=True)
+                    browser = self._ensure_browser()
+
+                # Petite pause anti-burst entre scrapes (pas le cadence marque)
+                lo = max(0.05, float(self.poll_min))
+                hi = max(lo, float(self.poll_max))
+                time.sleep(random.uniform(lo, hi))
 
                 write_scrape_heartbeat(
                     cycle=self._cycle,
@@ -286,7 +348,7 @@ class BrandWorker:
                     found=cycle_found,
                     skipped_deal=cycle_skipped,
                     brands=len(self.targets),
-                    brand_names=[t.brand for t in self.targets[:8]],
+                    brand_names=[target.brand],
                 )
             except Exception as exc:  # noqa: BLE001
                 log.exception(
@@ -483,6 +545,9 @@ def run_permanent_scrape_pool(
         w.start()
         brand_workers.append(w)
 
+    flush_worker = DiscordFlushWorker(poll_seconds=0.75, buffer_seconds=2.5)
+    flush_worker.start()
+
     # Filtre worker : démarre après le 1er brand (évite 2 Chromium au boot)
     time.sleep(45.0 if len(groups) <= 1 else max(5.0, float(len(groups)) * 5.0))
     filter_worker = FilterWorker(
@@ -552,5 +617,7 @@ def run_permanent_scrape_pool(
         for w in brand_workers:
             w.stop()
         filter_worker.stop()
+        flush_worker.stop()
+        flush_worker.join(timeout=15.0)
         write_scrape_heartbeat(cycle=0, status="pool_stopped")
         log.info("permanent_pool_stopped")

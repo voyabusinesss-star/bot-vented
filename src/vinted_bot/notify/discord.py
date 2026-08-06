@@ -99,6 +99,27 @@ VETEMENT_CATEGORIES: frozenset[str] = frozenset(
     }
 )
 
+# Accessoires / sacs : salon marque OK, jamais #all-vetement
+_ALL_VETEMENT_EXCLUDE_KEYWORDS: tuple[str, ...] = (
+    "sac",
+    "bag",
+    "handbag",
+    "tote",
+    "bandouliere",
+    "bandoulière",
+    "besace",
+    "sacoche",
+    "pochette",
+    "portefeuille",
+    "wallet",
+    "ceinture",
+    "belt",
+    "bijou",
+    "collier",
+    "bracelet",
+    "bague",
+)
+
 
 def is_classique_brand(brand: str | None) -> bool:
     """Marque des salons indémodables / les-classiques (hors luxe, hors sneakers pures)."""
@@ -152,6 +173,26 @@ def is_allowed_brand(
     if sneaker_map and route_channel(brand, sneaker_map) is not None:
         return True
     return False
+
+
+def is_vetement_for_all(
+    title: str | None,
+    category: str | None,
+) -> bool:
+    """Vêtement éligible #all-vetement (hors chaussures / sacs / accessoires)."""
+    from vinted_bot.services.deal_filter import (
+        _contains_keyword,
+        _normalize_text,
+        is_clothing_not_shoe,
+    )
+
+    title_n = _normalize_text(title)
+    for keyword in _ALL_VETEMENT_EXCLUDE_KEYWORDS:
+        if _contains_keyword(title_n, keyword):
+            return False
+    if category and category != "default":
+        return category in VETEMENT_CATEGORIES
+    return is_clothing_not_shoe(title)
 
 
 def belongs_in_all_vetement(
@@ -802,7 +843,7 @@ class DiscordNotifier:
         Si le post marque réussit, on considère l'annonce postée même si #all échoue
         (évite les doublons marque au prochain run).
         """
-        from vinted_bot.services.deal_filter import is_clothing_not_shoe, is_shoe_listing
+        from vinted_bot.services.deal_filter import is_shoe_listing
 
         deal = get_deal_evaluation(listing)
         category = getattr(deal, "category", None) if deal is not None else None
@@ -851,21 +892,14 @@ class DiscordNotifier:
         self.post_message(brand_channel_id, payload)
 
         all_channel = sanitize_discord_channel_id(self.settings.discord_channel_all)
-        # #all-vetement = indémodables vêtements uniquement.
-        is_vetement = (
-            category in VETEMENT_CATEGORIES
-            if category and category != "default"
-            else is_clothing_not_shoe(listing.title)
-        )
-        if category == "default":
-            is_vetement = is_clothing_not_shoe(listing.title)
-        mirror_all = (
-            bool(all_channel)
-            and all_channel != brand_channel_id
-            and brand_channel_id not in sneaker_ids
-            and not is_shoe
-            and is_classique_brand(listing.brand)
-            and is_vetement
+        # #all-vetement = indémodables vêtements seulement (règle unique).
+        is_vetement = is_vetement_for_all(listing.title, category)
+        mirror_all = bool(all_channel) and all_channel != brand_channel_id and belongs_in_all_vetement(
+            listing.brand,
+            is_shoe=is_shoe,
+            brand_channel_id=brand_channel_id,
+            sneaker_channel_ids=sneaker_ids,
+            is_vetement=is_vetement,
         )
         if mirror_all:
             try:

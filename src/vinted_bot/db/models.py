@@ -452,3 +452,21 @@ class VintedLinkToken(Base):
     used_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class DiscordOutbox(Base):
+    """File d'attente Discord triée par published_at (anti-groupement marques)."""
+
+    __tablename__ = "discord_outbox"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    listing_id: Mapped[int] = mapped_column(
+        ForeignKey("listings.id", ondelete="CASCADE"), index=True
+    )
+    channel_id: Mapped[str] = mapped_column(String(32), index=True)
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    enqueued_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    kind: Mapped[str] = mapped_column(String(16), default="brand")

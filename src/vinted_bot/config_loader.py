@@ -20,6 +20,8 @@ class PriorityPolicy:
     max_items: int | None = None
     # Plafond Discord par marque et passage (évite les rafales après attente)
     max_discord_posts: int | None = None
+    # Cadence indépendante (secondes entre deux scrapes de la même cible)
+    poll_interval_seconds: float | None = None
 
 
 @dataclass(slots=True)
@@ -36,6 +38,7 @@ class SearchTarget:
     extra_passes: int | None = None
     max_items: int | None = None
     max_discord_posts: int | None = None
+    poll_seconds: float | None = None
     price_from: float | None = None
     price_to: float | None = None
     # yaml = salons publics ; user_filter = alertes DM privées
@@ -79,13 +82,25 @@ def _as_int_list(value: Any) -> list[int]:
 def _default_priorities() -> dict[str, PriorityPolicy]:
     return {
         "high": PriorityPolicy(
-            every_n_cycles=1, extra_passes=0, max_items=4, max_discord_posts=2
+            every_n_cycles=1,
+            extra_passes=0,
+            max_items=4,
+            max_discord_posts=2,
+            poll_interval_seconds=20.0,
         ),
         "medium": PriorityPolicy(
-            every_n_cycles=1, extra_passes=0, max_items=3, max_discord_posts=2
+            every_n_cycles=1,
+            extra_passes=0,
+            max_items=3,
+            max_discord_posts=2,
+            poll_interval_seconds=45.0,
         ),
         "low": PriorityPolicy(
-            every_n_cycles=1, extra_passes=0, max_items=2, max_discord_posts=1
+            every_n_cycles=1,
+            extra_passes=0,
+            max_items=2,
+            max_discord_posts=1,
+            poll_interval_seconds=90.0,
         ),
     }
 
@@ -98,6 +113,7 @@ def _parse_priorities(raw: dict[str, Any] | None) -> dict[str, PriorityPolicy]:
         if not isinstance(conf, dict):
             continue
         base = policies.get(str(name), PriorityPolicy())
+        poll_raw = conf.get("poll_interval_seconds", base.poll_interval_seconds)
         policies[str(name)] = PriorityPolicy(
             every_n_cycles=max(1, int(conf.get("every_n_cycles", base.every_n_cycles))),
             extra_passes=max(0, int(conf.get("extra_passes", base.extra_passes))),
@@ -110,6 +126,9 @@ def _parse_priorities(raw: dict[str, Any] | None) -> dict[str, PriorityPolicy]:
                 int(conf["max_discord_posts"])
                 if conf.get("max_discord_posts") is not None
                 else base.max_discord_posts
+            ),
+            poll_interval_seconds=(
+                float(poll_raw) if poll_raw is not None else base.poll_interval_seconds
             ),
         )
     return policies
@@ -171,6 +190,11 @@ def load_searches_config(path: Path | None = None) -> SearchesConfig:
                 max_discord_posts=(
                     int(entry["max_discord_posts"])
                     if entry.get("max_discord_posts") is not None
+                    else None
+                ),
+                poll_seconds=(
+                    float(entry["poll_seconds"])
+                    if entry.get("poll_seconds") is not None
                     else None
                 ),
             )
@@ -271,7 +295,26 @@ def resolve_policy(
             if target.max_discord_posts is not None
             else base.max_discord_posts
         ),
+        poll_interval_seconds=(
+            target.poll_seconds
+            if target.poll_seconds is not None
+            else base.poll_interval_seconds
+        ),
     )
+
+
+def target_poll_interval_seconds(
+    target: SearchTarget,
+    priorities: dict[str, PriorityPolicy] | None = None,
+) -> float:
+    """Secondes entre deux scrapes de la même cible (planning indépendant)."""
+    policies = priorities or load_searches_config().priorities
+    policy = resolve_policy(target, policies)
+    raw = policy.poll_interval_seconds
+    if raw is None:
+        defaults = {"high": 20.0, "medium": 45.0, "low": 90.0}
+        raw = defaults.get(target.priority, 45.0)
+    return max(5.0, float(raw))
 
 
 def select_targets_for_cycle(

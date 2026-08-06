@@ -6,26 +6,31 @@
 #
 # priority: high | medium | low  (fréquence via section priorities)
 # brand_ids : IDs Vinted (filtre API précis, moins de bruit)
-# optionnel: catalog_ids, every_n_cycles, extra_passes, max_items
+# optionnel: catalog_ids, every_n_cycles, extra_passes, max_items, poll_seconds
+# poll_seconds : override cadence d'une marque (sinon priorities.poll_interval_seconds)
 # Par défaut catalog_ids = [4, 5] (vêtements F/H) → pas de chaussures.
 
 priorities:
   # --- Priorité élevée — max posts Discord par passe ---
+  # poll_interval_seconds = cadence indépendante par cible (scheduler next_run_at)
   high:
     every_n_cycles: 1
     extra_passes: 0
     max_items: 16
     max_discord_posts: 20
+    poll_interval_seconds: 20
   medium:
     every_n_cycles: 1
     extra_passes: 0
     max_items: 12
     max_discord_posts: 16
+    poll_interval_seconds: 45
   low:
     every_n_cycles: 1
     extra_passes: 0
     max_items: 10
     max_discord_posts: 12
+    poll_interval_seconds: 90
 
 searches:
   # --- Priorité élevée (forte concurrence) ---

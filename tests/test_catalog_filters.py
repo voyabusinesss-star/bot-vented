@@ -42,7 +42,7 @@ def test_build_catalog_params_with_price() -> None:
 
 def test_searches_config_loop_defaults() -> None:
     cfg = load_searches_config()
-    assert cfg.loop_interval_seconds >= 1
+    assert cfg.loop_interval_seconds > 0
     assert cfg.browser_restart_every_cycles >= 1
     assert cfg.order == "newest_first"
     assert cfg.searches

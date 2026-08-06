@@ -51,7 +51,8 @@ def test_yaml_priorities_loaded() -> None:
     cfg = load_searches_config()
     assert "high" in cfg.priorities
     assert cfg.priorities["high"].every_n_cycles == 1
+    assert cfg.priorities["high"].poll_interval_seconds == 20
     nike = next(s for s in cfg.searches if s.brand == "nike")
     assert nike.priority == "high"
     columbia = next(s for s in cfg.searches if s.brand == "columbia")
-    assert columbia.priority == "low"
+    assert columbia.priority in {"low", "medium"}

@@ -27,7 +27,6 @@ from vinted_bot.db.session import session_scope
 from vinted_bot.notify.discord import (
     attach_deal_evaluation,
     is_allowed_brand,
-    publish_listings_to_discord,
 )
 from vinted_bot.parsers.search import SearchItem, parse_catalog_payload
 from vinted_bot.services.deal_filter import evaluate_listing, load_deal_filters
@@ -35,6 +34,21 @@ from vinted_bot.utils.logging import get_logger
 from vinted_bot.utils.retry import retry_call
 
 log = get_logger(__name__)
+
+
+def listing_discord_sort_key(listing: Any) -> tuple[float, int]:
+    """Ordre d'envoi Discord : published_at ASC (fallback first_seen_at / vinted_id)."""
+    for attr in (
+        getattr(listing, "published_at", None),
+        getattr(listing, "first_seen_at", None),
+    ):
+        if attr is None:
+            continue
+        try:
+            return (attr.timestamp(), int(getattr(listing, "vinted_id", 0) or 0))
+        except Exception:  # noqa: BLE001
+            continue
+    return (0.0, int(getattr(listing, "vinted_id", 0) or 0))
 
 
 @dataclass(slots=True)
@@ -89,6 +103,7 @@ def scrape_search_once(
     price_to: float | None = None,
     skip_brand_channel_filter: bool = False,
     keep_search_text: bool = False,
+    defer_discord: bool = False,
 ) -> ScrapeSearchResult:
     settings = get_settings()
     base = base_url or settings.vinted_base_url
@@ -179,6 +194,32 @@ def scrape_search_once(
                 bootstrap=bootstrap,
                 order=order,
             )
+            if len(raw_items) >= max_items and raw_items:
+                oldest = raw_items[-1]
+                oldest_age_s: float | None = None
+                if oldest.published_at is not None:
+                    try:
+                        from datetime import datetime, timezone
+
+                        pub = oldest.published_at
+                        if pub.tzinfo is None:
+                            pub = pub.replace(tzinfo=timezone.utc)
+                        oldest_age_s = (
+                            datetime.now(timezone.utc) - pub
+                        ).total_seconds()
+                    except Exception:  # noqa: BLE001
+                        oldest_age_s = None
+                log.info(
+                    "catalog_page_full",
+                    query=query,
+                    max_items=max_items,
+                    found=len(raw_items),
+                    oldest_vinted_id=oldest.vinted_id,
+                    oldest_age_seconds=(
+                        round(oldest_age_s, 1) if oldest_age_s is not None else None
+                    ),
+                    hint="page1 saturée — risque de miss si revisit trop lent",
+                )
 
             with session_scope() as session:
                 for item in items:
@@ -302,6 +343,12 @@ def scrape_search_once(
         candidate_ids = list(dict.fromkeys([*created_vinted_ids, *all_vinted_ids]))
         to_post = get_unposted_listings_by_vinted_ids(session, candidate_ids)
         to_post.sort(key=lambda listing: listing.vinted_id, reverse=True)
+        if defer_discord and to_post:
+            from vinted_bot.jobs.discord_outbox import pending_brand_listing_ids
+
+            pending = pending_brand_listing_ids([listing.id for listing in to_post])
+            if pending:
+                to_post = [listing for listing in to_post if listing.id not in pending]
 
         qualified: list[tuple[Any, Any]] = []
         hard_reject_ids: list[int] = []
@@ -324,7 +371,7 @@ def scrape_search_once(
                     score=deal.score,
                 )
 
-        # Meilleurs scores d'abord (premium-ready)
+        # Sélection : meilleurs scores pour le plafond ; envoi : chrono published_at.
         qualified.sort(key=lambda pair: pair[1].score, reverse=True)
 
         post_cap = max_discord_posts
@@ -334,6 +381,9 @@ def scrape_search_once(
         # 0 = silence Discord explicite (ne jamais poster)
         selected = qualified[:post_cap]
         capped = qualified[post_cap:]
+
+        # Plus ancien d'abord → timeline Discord cohérente (score = sélection, pas ordre)
+        selected.sort(key=lambda pair: listing_discord_sort_key(pair[0]))
 
         announce: list[Any] = []
         for listing, deal in selected:
@@ -358,20 +408,24 @@ def scrape_search_once(
                 qualified=len(qualified),
             )
 
-    posted_ids = publish_listings_to_discord(
-        announce,
-        query=query,
-        items_found=len(items),
-        items_upserted=upserted,
-        scrape_run_id=run_id,
-        settings=settings,
-        # Aperçu géré juste après (public only) — pas via ce helper
-        bot_preview=False,
-    )
+    posted_ids: list[int] = []
+    if announce:
+        if defer_discord:
+            from vinted_bot.jobs.discord_outbox import enqueue_listings_for_discord
+
+            posted_ids = enqueue_listings_for_discord(announce)
+            # discord_posted_at marqué après flush réussi (FlushWorker)
+        else:
+            from vinted_bot.jobs.discord_outbox import (
+                enqueue_listings_for_discord,
+                flush_discord_outbox,
+            )
+
+            enqueue_listings_for_discord(announce)
+            flush_discord_outbox(buffer_seconds=0.0)
+            posted_ids = [listing.id for listing in announce]
+            # flush marque déjà discord_posted_at pour kind=brand
     posted = len(posted_ids)
-    if posted_ids:
-        with session_scope() as session:
-            mark_discord_posted(session, posted_ids)
 
     # Salon aperçu bot : 1 ping ralenti depuis le scrape PUBLIC seulement
     # (jamais les filtres privés / keep_search_text).
