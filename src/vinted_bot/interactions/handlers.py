@@ -19,6 +19,13 @@ from vinted_bot.interactions.alerts_panel import (
     build_user_alerts_payload,
 )
 from vinted_bot.interactions.reglement_panel import REGLEMENT_ACCEPT
+from vinted_bot.interactions.whop_claim_panel import (
+    WHOP_CHECKOUT_PREFIX,
+    WHOP_CLAIM,
+    WHOP_CLAIM_FIELD,
+    WHOP_CLAIM_MODAL,
+    build_whop_claim_modal,
+)
 from vinted_bot.interactions.recruitment_panel import (
     RECRUIT_CLOSE,
     RECRUIT_OPEN,
@@ -1039,6 +1046,108 @@ def _reglement_reply(
         )
 
 
+def handle_whop_claim_button(
+    client: DiscordInteractionClient,
+    interaction: dict[str, Any],
+) -> None:
+    client.respond_modal(
+        interaction["id"],
+        interaction["token"],
+        build_whop_claim_modal(),
+    )
+
+
+def handle_whop_claim_modal(
+    client: DiscordInteractionClient,
+    interaction: dict[str, Any],
+) -> None:
+    from vinted_bot.services.whop_webhooks import claim_whop_access
+
+    user = _interaction_user(interaction)
+    user_id = int(user.get("id") or 0)
+    if not user_id:
+        client.respond_ephemeral(
+            interaction["id"],
+            interaction["token"],
+            "Impossible d'identifier ton compte Discord.",
+        )
+        return
+    values = _modal_values(interaction)
+    reference = (values.get(WHOP_CLAIM_FIELD) or "").strip()
+    ok, message = claim_whop_access(
+        discord_user_id=user_id,
+        reference=reference,
+        discord_username=_discord_display_name(user),
+    )
+    prefix = "✅ " if ok else "❌ "
+    client.respond_ephemeral(
+        interaction["id"],
+        interaction["token"],
+        f"{prefix}{message}",
+    )
+
+
+def handle_whop_checkout_button(
+    client: DiscordInteractionClient,
+    interaction: dict[str, Any],
+) -> None:
+    from vinted_bot.services.whop_webhooks import create_checkout_url_for_discord
+
+    custom_id = str(interaction.get("data", {}).get("custom_id", ""))
+    tier = custom_id[len(WHOP_CHECKOUT_PREFIX) :].strip().lower()
+    user = _interaction_user(interaction)
+    user_id = int(user.get("id") or 0)
+    if not user_id:
+        client.respond_ephemeral(
+            interaction["id"],
+            interaction["token"],
+            "Impossible d'identifier ton compte Discord.",
+        )
+        return
+    url, err = create_checkout_url_for_discord(
+        tier=tier,
+        discord_user_id=user_id,
+    )
+    if not url:
+        client.respond_ephemeral(
+            interaction["id"],
+            interaction["token"],
+            "Lien checkout indisponible pour cette offre. "
+            "Utilise le lien sous la bannière, puis **Activer mon accès**.",
+        )
+        return
+    note = ""
+    if err:
+        note = (
+            "\n_(Lien standard — après paiement, clique **Activer mon accès**.)_"
+        )
+    else:
+        # Si URL personnalisée (session), le rôle peut arriver auto via metadata.
+        settings = get_settings()
+        has_plans = any(
+            (
+                getattr(settings, "whop_plan_starter", ""),
+                getattr(settings, "whop_plan_pro", ""),
+                getattr(settings, "whop_plan_proplus", ""),
+            )
+        )
+        if has_plans and "session=" in url:
+            note = (
+                "\nCe lien est lié à ton Discord : le rôle devrait "
+                "arriver après paiement. Sinon → **Activer mon accès**."
+            )
+        else:
+            note = (
+                "\nAprès paiement, si le rôle n’apparaît pas → "
+                "**Activer mon accès** (email Whop)."
+            )
+    client.respond_ephemeral(
+        interaction["id"],
+        interaction["token"],
+        f"🔗 Ton lien **{tier.upper()}** :\n{url}{note}",
+    )
+
+
 def handle_reglement_accept(
     client: DiscordInteractionClient,
     interaction: dict[str, Any],
@@ -1680,6 +1789,12 @@ def dispatch_interaction(
                 client, interaction, already_deferred=already_deferred
             )
             return
+        if custom_id == WHOP_CLAIM:
+            handle_whop_claim_button(client, interaction)
+            return
+        if custom_id.startswith(WHOP_CHECKOUT_PREFIX):
+            handle_whop_checkout_button(client, interaction)
+            return
 
     if interaction_type == 5:
         custom_id = str(interaction.get("data", {}).get("custom_id", ""))
@@ -1688,6 +1803,9 @@ def dispatch_interaction(
             return
         if custom_id.startswith(ALERT_EDIT_MODAL_PREFIX):
             handle_alert_edit_modal(client, interaction)
+            return
+        if custom_id == WHOP_CLAIM_MODAL:
+            handle_whop_claim_modal(client, interaction)
             return
 
     client.respond_ephemeral(

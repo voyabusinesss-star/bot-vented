@@ -516,16 +516,19 @@ class DiscordInteractionClient:
                 webhook_body["components"] = payload["components"]
             if logo_url:
                 webhook_body["avatar_url"] = logo_url
+            wh_params: dict[str, str] = {"wait": "true"}
+            if webhook_body.get("components"):
+                wh_params["with_components"] = "true"
             if files:
                 response = self._client.post(
                     f"/webhooks/{wh_id}/{wh_token}",
-                    params={"wait": "true"},
+                    params=wh_params,
                     files=self._multipart_payload(webhook_body, files),
                 )
             else:
                 response = self._client.post(
                     f"/webhooks/{wh_id}/{wh_token}",
-                    params={"wait": "true"},
+                    params=wh_params,
                     json=webhook_body,
                 )
             if response.status_code >= 400:
@@ -602,10 +605,13 @@ class DiscordInteractionClient:
         *,
         logo_bytes: bytes | None,
     ) -> dict[str, Any]:
+        params: dict[str, str] = {"wait": "true"}
+        if webhook_body.get("components"):
+            params["with_components"] = "true"
         if logo_bytes:
             response = self._client.post(
                 f"/webhooks/{webhook_id}/{webhook_token}",
-                params={"wait": "true"},
+                params=params,
                 files={
                     "payload_json": (
                         None,
@@ -618,7 +624,7 @@ class DiscordInteractionClient:
         else:
             response = self._client.post(
                 f"/webhooks/{webhook_id}/{webhook_token}",
-                params={"wait": "true"},
+                params=params,
                 json=webhook_body,
             )
         if response.status_code >= 400:
@@ -635,9 +641,12 @@ class DiscordInteractionClient:
         *,
         attachments: list[tuple[str, bytes, str]],
     ) -> dict[str, Any]:
+        params: dict[str, str] = {"wait": "true"}
+        if webhook_body.get("components"):
+            params["with_components"] = "true"
         response = self._client.post(
             f"/webhooks/{webhook_id}/{webhook_token}",
-            params={"wait": "true"},
+            params=params,
             files=self._multipart_payload(webhook_body, attachments),
         )
         if response.status_code >= 400:

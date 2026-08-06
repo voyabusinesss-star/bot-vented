@@ -144,6 +144,8 @@ def build_subscription_embed_payload(
 
 def build_subscriptions_intro_payload() -> dict[str, Any]:
     """Message d'en-tête en haut du salon Nos offres."""
+    from vinted_bot.interactions.whop_claim_panel import build_subscriptions_claim_row
+
     by_key = {t.key: t for t in SUBSCRIPTION_TIERS}
 
     def _short(tier_key: str) -> str:
@@ -157,12 +159,14 @@ def build_subscriptions_intro_payload() -> dict[str, Any]:
             f"🟢 **Starter — {_short('starter')}**\n"
             f"🔵 **Pro — {_short('pro')} ⭐**\n"
             f"🟣 **Pro+ — {_short('proplus')}**\n\n"
-            "👇 Rejoins Resello et passe au niveau supérieur."
+            "👇 Rejoins via le lien de l’offre, puis clique "
+            "**Activer mon accès** si le rôle n’arrive pas tout seul "
+            "(pas besoin de lier Discord sur Whop)."
         )[:4096],
         "color": EMBED_COLOR,
         "footer": {"text": "Resello · Abonnements"},
     }
-    return {"embeds": [embed]}
+    return {"embeds": [embed], "components": [build_subscriptions_claim_row()]}
 
 
 def load_banner_bytes(

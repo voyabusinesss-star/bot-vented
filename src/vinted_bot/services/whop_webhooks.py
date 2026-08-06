@@ -326,23 +326,252 @@ def resolve_discord_user_id(
     return extract_discord_user_id(enriched)
 
 
+def extract_email(data: dict[str, Any]) -> str | None:
+    for candidate in (
+        _dig(data, "user", "email"),
+        _dig(data, "member", "user", "email"),
+        _dig(data, "email"),
+        _dig(data, "metadata", "email"),
+    ):
+        text = str(candidate or "").strip().lower()
+        if text and "@" in text:
+            return text
+    return None
+
+
+def extract_license_key(data: dict[str, Any]) -> str | None:
+    for candidate in (
+        data.get("license_key"),
+        _dig(data, "membership", "license_key"),
+    ):
+        text = str(candidate or "").strip()
+        if text:
+            return text
+    return None
+
+
 def store_pending_claim(
     membership_id: str,
     *,
     plan: str,
     product_id: str | None,
+    email: str | None = None,
+    license_key: str | None = None,
 ) -> None:
+    """Mémoire + Postgres (survit aux redémarrages Railway)."""
     with _pending_lock:
         _pending_claims[membership_id] = {
             "plan": plan,
             "product_id": product_id,
+            "email": email,
+            "license_key": license_key,
             "stored_at": time.time(),
         }
+    try:
+        from vinted_bot.db.session import session_scope
+        from vinted_bot.db.whop_claims import upsert_pending_claim
+
+        with session_scope() as session:
+            upsert_pending_claim(
+                session,
+                membership_id=membership_id,
+                plan=plan,
+                product_id=product_id,
+                email=email,
+                license_key=license_key,
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "whop_pending_claim_db_failed",
+            membership_id=membership_id,
+            error=str(exc)[:160],
+        )
 
 
 def pop_pending_claim(membership_id: str) -> dict[str, Any] | None:
     with _pending_lock:
         return _pending_claims.pop(membership_id, None)
+
+
+def create_checkout_url_for_discord(
+    *,
+    tier: str,
+    discord_user_id: int,
+    settings: Settings | None = None,
+) -> tuple[str | None, str | None]:
+    """Crée un checkout Whop avec metadata discord_id.
+
+    Retourne (url, erreur). Si plan/company manquants → URL checkout statique.
+    """
+    import httpx
+
+    s = settings or get_settings()
+    tier_n = (tier or "").strip().lower()
+    plan_by_tier = {
+        "starter": str(getattr(s, "whop_plan_starter", "") or "").strip(),
+        "pro": str(getattr(s, "whop_plan_pro", "") or "").strip(),
+        "premium": str(getattr(s, "whop_plan_pro", "") or "").strip(),
+        "proplus": str(getattr(s, "whop_plan_proplus", "") or "").strip(),
+        "pro+": str(getattr(s, "whop_plan_proplus", "") or "").strip(),
+        "elite": str(getattr(s, "whop_plan_proplus", "") or "").strip(),
+    }
+    static_by_tier = {
+        "starter": str(getattr(s, "subscriptions_checkout_starter", "") or "").strip(),
+        "pro": str(getattr(s, "subscriptions_checkout_pro", "") or "").strip(),
+        "premium": str(getattr(s, "subscriptions_checkout_pro", "") or "").strip(),
+        "proplus": str(getattr(s, "subscriptions_checkout_proplus", "") or "").strip(),
+        "pro+": str(getattr(s, "subscriptions_checkout_proplus", "") or "").strip(),
+        "elite": str(getattr(s, "subscriptions_checkout_proplus", "") or "").strip(),
+    }
+    plan_id = plan_by_tier.get(tier_n, "")
+    static_url = static_by_tier.get(tier_n, "")
+    api_key = str(getattr(s, "whop_api_key", "") or "").strip()
+    company_id = str(getattr(s, "whop_company_id", "") or "").strip()
+
+    if api_key and company_id and plan_id:
+        try:
+            response = httpx.post(
+                "https://api.whop.com/api/v1/checkout_configurations",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "company_id": company_id,
+                    "plan_id": plan_id,
+                    "metadata": {
+                        "discord_id": str(int(discord_user_id)),
+                        "discord_user_id": str(int(discord_user_id)),
+                    },
+                },
+                timeout=20.0,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("whop_checkout_create_failed", error=str(exc)[:160])
+            return static_url or None, str(exc)[:120]
+        if response.status_code < 400:
+            payload = response.json() if response.content else {}
+            url = (
+                (payload.get("purchase_url") if isinstance(payload, dict) else None)
+                or None
+            )
+            if url:
+                return str(url), None
+            plan_obj = payload.get("plan") if isinstance(payload, dict) else None
+            pid = (
+                plan_obj.get("id")
+                if isinstance(plan_obj, dict)
+                else None
+            ) or plan_id
+            session_id = payload.get("id") if isinstance(payload, dict) else None
+            if session_id:
+                return (
+                    f"https://whop.com/checkout/{pid}?session={session_id}",
+                    None,
+                )
+            return f"https://whop.com/checkout/{pid}", None
+        log.warning(
+            "whop_checkout_create_http",
+            status=response.status_code,
+            body=response.text[:200],
+        )
+        return static_url or None, f"Whop HTTP {response.status_code}"
+
+    return static_url or None, None
+
+
+def claim_whop_access(
+    *,
+    discord_user_id: int,
+    reference: str,
+    discord_username: str | None = None,
+    settings: Settings | None = None,
+) -> tuple[bool, str]:
+    """Lie un paiement Whop (email / mem_ / license) au compte Discord cliqueur."""
+    from vinted_bot.db.session import session_scope
+    from vinted_bot.db.whop_claims import find_open_claim, mark_claim_used
+
+    s = settings or get_settings()
+    ref = (reference or "").strip()
+    if not ref:
+        return False, "Référence vide."
+
+    membership_id: str | None = None
+    email: str | None = None
+    license_key: str | None = None
+    lower = ref.lower()
+    if lower.startswith("mem_"):
+        membership_id = ref
+    elif "@" in ref:
+        email = lower
+    else:
+        license_key = ref
+
+    plan: str | None = None
+    product_id: str | None = None
+    found_mem: str | None = None
+
+    with session_scope() as session:
+        row = find_open_claim(
+            session,
+            membership_id=membership_id,
+            email=email,
+            license_key=license_key,
+        )
+        if row is not None:
+            plan = row.plan
+            product_id = row.product_id
+            found_mem = row.membership_id
+
+    if plan is None and membership_id:
+        enriched = fetch_whop_membership(membership_id, settings=s)
+        if enriched:
+            product_id = extract_product_id(enriched) or product_id
+            plan = plan_for_product_id(product_id, settings=s)
+            found_mem = extract_membership_id(enriched) or membership_id
+            # Persist for audit
+            if plan and found_mem:
+                store_pending_claim(
+                    found_mem,
+                    plan=plan,
+                    product_id=product_id,
+                    email=extract_email(enriched) or email,
+                    license_key=extract_license_key(enriched) or license_key,
+                )
+
+    if not plan or not found_mem:
+        return (
+            False,
+            "Aucun abonnement Whop trouvé pour cette référence.\n"
+            "Vérifie l’email exact du paiement, ou colle ton `mem_…` "
+            "(Whop → Manage membership).",
+        )
+
+    activate_subscription(
+        discord_user_id=int(discord_user_id),
+        plan=plan,
+        membership_id=found_mem,
+        discord_username=discord_username,
+        settings=s,
+    )
+    try:
+        with session_scope() as session:
+            mark_claim_used(
+                session,
+                found_mem,
+                discord_user_id=int(discord_user_id),
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("whop_claim_mark_failed", error=str(exc)[:120])
+    pop_pending_claim(found_mem)
+
+    plan_label = {
+        "starter": "Starter",
+        "premium": "Pro",
+        "elite": "Pro+",
+    }.get(plan, plan)
+    return True, f"Accès **{plan_label}** activé. Ton rôle Discord est à jour."
 
 
 def subscription_role_ids(settings: Settings | None = None) -> dict[str, str]:
@@ -588,13 +817,18 @@ def handle_whop_event(
         if discord_user_id is None:
             if membership_id:
                 store_pending_claim(
-                    membership_id, plan=plan, product_id=product_id
+                    membership_id,
+                    plan=plan,
+                    product_id=product_id,
+                    email=extract_email(data),
+                    license_key=extract_license_key(data),
                 )
             log.warning(
                 "whop_missing_discord_id",
                 membership_id=membership_id,
                 product_id=product_id,
                 plan=plan,
+                email=extract_email(data),
             )
             return "pending_discord"
         activate_subscription(

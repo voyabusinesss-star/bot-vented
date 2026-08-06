@@ -380,6 +380,7 @@ class Settings(BaseSettings):
     whop_plan_starter: str = ""
     whop_plan_pro: str = ""
     whop_plan_proplus: str = ""
+    whop_company_id: str = ""
     whop_webhook_host: str = "0.0.0.0"
     whop_webhook_port: int = Field(default=8788, ge=1, le=65535)
     # Railway injecte PORT — prioritaire pour exposer le webhook en HTTPS

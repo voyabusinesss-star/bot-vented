@@ -496,3 +496,24 @@ class DiscordOutbox(Base):
     )
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     kind: Mapped[str] = mapped_column(String(16), default="brand")
+
+
+class WhopPendingClaim(Base):
+    """Abo Whop payé sans Discord lié — en attente d'activation sur Discord."""
+
+    __tablename__ = "whop_pending_claims"
+
+    membership_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    plan: Mapped[str] = mapped_column(String(32))
+    product_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    license_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    claimed_discord_user_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, nullable=True
+    )

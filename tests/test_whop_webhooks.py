@@ -61,6 +61,55 @@ def test_extract_discord_from_custom_field() -> None:
     assert extract_discord_user_id(data) == 123456789012345678
 
 
+def test_claim_whop_access_by_email(monkeypatch) -> None:
+    from vinted_bot.services import whop_webhooks as wh
+
+    class _Claim:
+        membership_id = "mem_abc"
+        plan = "premium"
+        product_id = "prod_pro"
+
+    class _Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    calls = {"activate": 0, "marked": 0}
+
+    monkeypatch.setattr(
+        "vinted_bot.db.session.session_scope",
+        lambda: _Session(),
+    )
+    monkeypatch.setattr(
+        "vinted_bot.db.whop_claims.find_open_claim",
+        lambda session, **kw: _Claim(),
+    )
+    monkeypatch.setattr(
+        "vinted_bot.db.whop_claims.mark_claim_used",
+        lambda session, mid, **kw: calls.__setitem__(
+            "marked", calls["marked"] + 1
+        ),
+    )
+
+    def fake_activate(**kw):
+        calls["activate"] += 1
+        assert kw["discord_user_id"] == 42
+        assert kw["plan"] == "premium"
+        assert kw["membership_id"] == "mem_abc"
+
+    monkeypatch.setattr(wh, "activate_subscription", fake_activate)
+    ok, msg = wh.claim_whop_access(
+        discord_user_id=42,
+        reference="Buyer@Email.COM",
+        settings=SimpleNamespace(),
+    )
+    assert ok is True
+    assert "Pro" in msg
+    assert calls["activate"] == 1
+    assert calls["marked"] == 1
+
 
 def test_verify_whop_signature_ok() -> None:
     secret = "test_whop_secret"
