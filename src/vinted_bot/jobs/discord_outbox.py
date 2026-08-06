@@ -216,23 +216,32 @@ def flush_discord_outbox(
             .unique()
             .all()
         }
-        # Capture primitives before session closes (expire_on_commit)
-        payload_jobs: list[tuple[int, str, str, Listing, dict[str, Any]]] = []
+        # Build payloads in-session (no expunge — same listing can be brand+ALL)
+        payload_jobs: list[
+            tuple[int, str, str, int, int | None, str | None, str | None, dict[str, Any]]
+        ] = []
+        built_payloads: dict[int, dict[str, Any]] = {}
         for row in ordered:
             listing = listings.get(row.listing_id)
             if listing is None:
                 row.status = OUTBOX_STATUS_FAILED
                 continue
-            for photo in list(listing.photos):
-                session.expunge(photo)
-            session.expunge(listing)
+            if listing.id not in built_payloads:
+                built_payloads[listing.id] = build_listing_payload(listing)
             payload_jobs.append(
                 (
                     int(row.id),
                     str(row.channel_id),
                     str(row.kind),
-                    listing,
-                    build_listing_payload(listing),
+                    int(listing.id),
+                    int(listing.vinted_id) if listing.vinted_id is not None else None,
+                    listing.brand,
+                    (
+                        listing.published_at.isoformat()
+                        if listing.published_at is not None
+                        else None
+                    ),
+                    built_payloads[listing.id],
                 )
             )
 
@@ -245,27 +254,30 @@ def flush_discord_outbox(
     delay = float(settings.discord_post_delay_seconds or 0.0)
 
     with DiscordNotifier(settings) as notifier:
-        for index, (row_id, channel_id, kind, listing, payload) in enumerate(
-            payload_jobs
-        ):
+        for index, (
+            row_id,
+            channel_id,
+            kind,
+            listing_id,
+            vinted_id,
+            brand,
+            published_at,
+            payload,
+        ) in enumerate(payload_jobs):
             try:
                 notifier.post_message(channel_id, payload)
                 sent_row_ids.append(row_id)
                 if kind == KIND_BRAND:
-                    posted_listing_ids.append(listing.id)
+                    posted_listing_ids.append(listing_id)
                 log.info(
                     "discord_outbox_sent",
                     outbox_id=row_id,
                     kind=kind,
                     channel_id=channel_id,
-                    listing_id=listing.id,
-                    vinted_id=listing.vinted_id,
-                    brand=listing.brand,
-                    published_at=(
-                        listing.published_at.isoformat()
-                        if listing.published_at
-                        else None
-                    ),
+                    listing_id=listing_id,
+                    vinted_id=vinted_id,
+                    brand=brand,
+                    published_at=published_at,
                 )
             except Exception as exc:  # noqa: BLE001
                 failed_row_ids.append(row_id)
