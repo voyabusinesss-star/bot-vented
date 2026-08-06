@@ -21,7 +21,46 @@ log = get_logger(__name__)
 _pending_claims: dict[str, dict[str, Any]] = {}
 _pending_lock = threading.Lock()
 
+# discord_user_id → timestamp acceptation règlement (filet auto-claim Whop)
+_recent_reglement: dict[int, float] = {}
+_recent_reglement_lock = threading.Lock()
+_RECENT_REGLEMENT_TTL_SECONDS = 45 * 60
+
 _SIGNATURE_TOLERANCE_SECONDS = 300
+
+
+def note_reglement_accepted(discord_user_id: int) -> None:
+    """Mémorise un accept règlement récent (pour lier un paiement Whop sans Discord)."""
+    try:
+        uid = int(discord_user_id)
+    except (TypeError, ValueError):
+        return
+    if uid <= 0:
+        return
+    with _recent_reglement_lock:
+        now = time.time()
+        _recent_reglement[uid] = now
+        expired = [
+            k
+            for k, ts in _recent_reglement.items()
+            if now - ts > _RECENT_REGLEMENT_TTL_SECONDS
+        ]
+        for k in expired:
+            _recent_reglement.pop(k, None)
+
+
+def recent_reglement_candidates(*, within_seconds: int | None = None) -> list[int]:
+    """IDs Discord ayant accepté le règlement récemment (plus récent en premier)."""
+    ttl = within_seconds or _RECENT_REGLEMENT_TTL_SECONDS
+    now = time.time()
+    with _recent_reglement_lock:
+        items = [
+            (uid, ts)
+            for uid, ts in _recent_reglement.items()
+            if now - ts <= ttl
+        ]
+    items.sort(key=lambda x: x[1], reverse=True)
+    return [uid for uid, _ in items]
 
 
 def _plan_id_from_checkout_url(url: str) -> str:
@@ -690,6 +729,88 @@ def create_checkout_url_for_discord(
     return static_url or None, "missing:" + ",".join(missing) if missing else None
 
 
+def try_auto_claim_from_recent_reglement(
+    *,
+    membership_id: str | None,
+    plan: str,
+    product_id: str | None,
+    email: str | None = None,
+    license_key: str | None = None,
+    settings: Settings | None = None,
+) -> int | None:
+    """Si exactement 1 membre a accepté le règlement récemment sans abo → lien auto."""
+    from sqlalchemy import select
+
+    from vinted_bot.db.models import DiscordMemberPlan
+    from vinted_bot.db.session import session_scope
+    from vinted_bot.db.whop_claims import mark_claim_used
+
+    s = settings or get_settings()
+    candidates = recent_reglement_candidates(within_seconds=30 * 60)
+    if not candidates:
+        return None
+
+    eligible: list[int] = []
+    try:
+        with session_scope() as session:
+            for uid in candidates:
+                row = session.scalar(
+                    select(DiscordMemberPlan).where(
+                        DiscordMemberPlan.discord_user_id == int(uid)
+                    )
+                )
+                if row is not None and bool(getattr(row, "subscription_active", False)):
+                    continue
+                eligible.append(uid)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("whop_auto_claim_db_failed", error=str(exc)[:160])
+        eligible = list(candidates)
+
+    if len(eligible) != 1:
+        log.info(
+            "whop_auto_claim_skip",
+            reason="ambiguous_or_empty",
+            candidates=len(candidates),
+            eligible=len(eligible),
+            membership_id=membership_id,
+        )
+        return None
+
+    discord_user_id = eligible[0]
+    activate_subscription(
+        discord_user_id=discord_user_id,
+        plan=plan,
+        membership_id=membership_id,
+        settings=s,
+    )
+    if membership_id:
+        store_pending_claim(
+            membership_id,
+            plan=plan,
+            product_id=product_id,
+            email=email,
+            license_key=license_key,
+        )
+        try:
+            with session_scope() as session:
+                mark_claim_used(
+                    session,
+                    membership_id,
+                    discord_user_id=discord_user_id,
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("whop_auto_claim_mark_failed", error=str(exc)[:120])
+        pop_pending_claim(membership_id)
+    log.info(
+        "whop_auto_claim_from_reglement",
+        discord_user_id=discord_user_id,
+        membership_id=membership_id,
+        plan=plan,
+        email=email,
+    )
+    return discord_user_id
+
+
 def claim_whop_access(
     *,
     discord_user_id: int,
@@ -1024,20 +1145,32 @@ def handle_whop_event(
                 settings=s,
             )
         if discord_user_id is None:
+            email = extract_email(data)
+            license_key = extract_license_key(data)
             if membership_id:
                 store_pending_claim(
                     membership_id,
                     plan=plan,
                     product_id=product_id,
-                    email=extract_email(data),
-                    license_key=extract_license_key(data),
+                    email=email,
+                    license_key=license_key,
                 )
+            auto_uid = try_auto_claim_from_recent_reglement(
+                membership_id=membership_id,
+                plan=plan,
+                product_id=product_id,
+                email=email,
+                license_key=license_key,
+                settings=s,
+            )
+            if auto_uid is not None:
+                return "activated_auto_reglement"
             log.warning(
                 "whop_missing_discord_id",
                 membership_id=membership_id,
                 product_id=product_id,
                 plan=plan,
-                email=extract_email(data),
+                email=email,
             )
             return "pending_discord"
         activate_subscription(

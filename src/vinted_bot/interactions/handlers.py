@@ -1191,6 +1191,12 @@ def handle_reglement_accept(
             return
 
     if role_id in member_roles:
+        try:
+            from vinted_bot.services.whop_webhooks import note_reglement_accepted
+
+            note_reglement_accepted(user_id)
+        except Exception:  # noqa: BLE001
+            pass
         _reglement_reply(
             client,
             interaction,
@@ -1223,6 +1229,13 @@ def handle_reglement_accept(
             already_deferred=already_deferred,
         )
         return
+
+    try:
+        from vinted_bot.services.whop_webhooks import note_reglement_accepted
+
+        note_reglement_accepted(user_id)
+    except Exception:  # noqa: BLE001
+        pass
 
     _reglement_reply(
         client,
