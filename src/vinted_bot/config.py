@@ -172,8 +172,8 @@ class Settings(BaseSettings):
     request_delay_seconds: float = 0.5
     max_retries: int = 3
     scrape_headless: bool = True
-    # Navigateurs sticky (5 ≈ revisit <20s sur ~45 marques ; staggered start)
-    scrape_parallel_workers: int = Field(default=5, ge=1, le=20)
+    # Navigateurs sticky (3 = stable RAM Railway ; >4 clampé anti-OOM)
+    scrape_parallel_workers: int = Field(default=3, ge=1, le=20)
     # Pause minimale entre deux recherches du même worker (quasi temps réel)
     scrape_poll_seconds_min: float = Field(default=0.2, ge=0.1)
     scrape_poll_seconds_max: float = Field(default=0.4, ge=0.1)

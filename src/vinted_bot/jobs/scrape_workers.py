@@ -511,6 +511,14 @@ def run_permanent_scrape_pool(
     settings = get_settings()
     cfg = load_searches_config()
     n_workers = max(1, int(settings.scrape_parallel_workers))
+    if n_workers > 4:
+        log.warning(
+            "scrape_workers_clamped",
+            requested=n_workers,
+            clamped=4,
+            hint="RAM Railway — max 4 Chromium brand workers",
+        )
+        n_workers = 4
     poll_min = float(settings.scrape_poll_seconds_min)
     poll_max = float(settings.scrape_poll_seconds_max)
     proxies = list(settings.scrape_proxy_urls or [])
@@ -556,7 +564,7 @@ def run_permanent_scrape_pool(
             poll_max=poll_max,
             restart_every=restart_every,
             reconnect_delay=reconnect,
-            start_delay=float(i) * 8.0,
+            start_delay=float(i) * 12.0,
         )
         w.start()
         brand_workers.append(w)
