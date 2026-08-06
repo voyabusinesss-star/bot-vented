@@ -368,8 +368,12 @@ class BrandWorker:
             self._ensure_browser()
         self._successes = 0
 
-    def _inject_filter_targets(self, browser: VintedBrowser) -> None:
-        """Intercale 1–2 cibles filtre dans le Chromium marques (si FilterWorker off)."""
+    def _inject_filter_targets(self, browser: VintedBrowser | None = None) -> None:
+        """Intercale 1–2 cibles filtre dans le Chromium marques (si FilterWorker off).
+
+        Toujours ré-assure le browser : un force_stop mid-scrape laisse sinon
+        une référence morte (« non démarré ») et les filtres n'alertent plus.
+        """
         if not self._inject_filters:
             return
         settings = get_settings()
@@ -388,11 +392,13 @@ class BrandWorker:
 
         rotator = get_filter_target_rotator()
         pending = rotator.size()
-        take = 2 if pending >= 20 else 1
+        take = 2 if pending >= 2 else 1
         batch = rotator.next_batch(take)
         if not batch:
             self._next_filter_inject_at = now + interval
             return
+
+        browser = self._ensure_browser()
         for ftarget in batch:
             if self._stop.is_set():
                 break
@@ -426,7 +432,34 @@ class BrandWorker:
                     query=ftarget.query,
                     error=str(exc)[:160],
                 )
-                raise
+                # Browser mort / timeout → recreate et 1 retry
+                self._close_browser()
+                browser = self._ensure_browser()
+                try:
+                    created, posted, found, skipped = _scrape_target(
+                        ftarget,
+                        browser=browser,
+                        headless=self.headless,
+                        max_items=self.max_items,
+                    )
+                    self._touch()
+                    log.info(
+                        "brand_worker_filter_injected_retry",
+                        worker_id=self.worker_id,
+                        brand=ftarget.brand,
+                        query=ftarget.query,
+                        created=created,
+                        found=found,
+                    )
+                except Exception as exc2:  # noqa: BLE001
+                    log.warning(
+                        "brand_worker_filter_inject_retry_failed",
+                        worker_id=self.worker_id,
+                        brand=ftarget.brand,
+                        query=ftarget.query,
+                        error=str(exc2)[:160],
+                    )
+                    raise
         self._next_filter_inject_at = time.monotonic() + interval
 
     def _run(self) -> None:
@@ -534,18 +567,30 @@ class BrandWorker:
 
                 # Filtres privés : 1–2 requêtes intercalées (même Chromium, pas de 2e process)
                 try:
-                    self._inject_filter_targets(browser)
+                    self._inject_filter_targets()
                 except Exception as exc:  # noqa: BLE001
-                    crashed = "crashed" in str(exc).lower() or "Target closed" in str(
-                        exc
+                    log.warning(
+                        "brand_worker_filter_inject_cycle_failed",
+                        worker_id=self.worker_id,
+                        error=str(exc)[:160],
                     )
                     self._close_browser()
-                    if not crashed:
-                        time.sleep(self.reconnect_delay)
-                    else:
-                        time.sleep(min(2.0, self.reconnect_delay))
-                    browser = self._ensure_browser()
+                    time.sleep(min(2.0, self.reconnect_delay))
+                    self._ensure_browser()
                     self._touch()
+                    # Retry immédiat une fois (sinon les filtres restent muets jusqu'au prochain interval)
+                    try:
+                        self._next_filter_inject_at = 0.0
+                        self._inject_filter_targets()
+                    except Exception as exc2:  # noqa: BLE001
+                        log.warning(
+                            "brand_worker_filter_inject_cycle_retry_failed",
+                            worker_id=self.worker_id,
+                            error=str(exc2)[:160],
+                        )
+                        self._close_browser()
+                        self._ensure_browser()
+                        self._touch()
 
                 if self._successes >= self.restart_every:
                     self._recycle_browser(rotate=True)

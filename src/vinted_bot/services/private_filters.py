@@ -42,6 +42,7 @@ _CATEGORY_ALIASES: dict[str, tuple[str, ...]] = {
     "veste": ("veste", "jacket", "blouson", "coat", "manteau"),
     "hoodie": ("hoodie", "sweat", "hooded"),
     "pantalon": ("pantalon", "pants", "jean", "cargo"),
+    "short": ("short", "shorts", "bermuda"),
 }
 
 

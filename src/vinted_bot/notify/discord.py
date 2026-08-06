@@ -64,6 +64,7 @@ def normalize_brand(brand: str | None) -> str:
         "polo ralph lauren": "ralph lauren",
         "ralph lauren polo": "ralph lauren",
         "carhartt wip": "carhartt",
+        "carhart": "carhartt",
         "under armor": "under armour",
         "acne studio": "acne studios",
         "cdg": "comme des garcons",
