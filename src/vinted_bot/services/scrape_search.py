@@ -248,18 +248,8 @@ def scrape_search_once(
                         source_query=query,
                         record_observation=False,
                     )
-                    try:
-                        from vinted_bot.services.market_entities import (
-                            enrich_listing_entities,
-                        )
-
-                        enrich_listing_entities(session, listing)
-                    except Exception as enrich_exc:  # noqa: BLE001
-                        log.warning(
-                            "listing_enrich_failed",
-                            vinted_id=item.vinted_id,
-                            error=str(enrich_exc),
-                        )
+                    # Enrich désactivé sur le path scrape Discord (tables entities
+                    # souvent lockées / inutiles pour le spawn salon).
                     upserted += 1
                     if created:
                         created_count += 1
