@@ -522,14 +522,14 @@ def run_permanent_scrape_pool(
     settings = get_settings()
     cfg = load_searches_config()
     n_workers = max(1, int(settings.scrape_parallel_workers))
-    if n_workers > 4:
+    if n_workers > 3:
         log.warning(
             "scrape_workers_clamped",
             requested=n_workers,
-            clamped=4,
-            hint="RAM Railway — max 4 Chromium brand workers",
+            clamped=3,
+            hint="RAM Railway — max 3 Chromium brand workers",
         )
-        n_workers = 4
+        n_workers = 3
     poll_min = float(settings.scrape_poll_seconds_min)
     poll_max = float(settings.scrape_poll_seconds_max)
     proxies = list(settings.scrape_proxy_urls or [])
@@ -603,8 +603,9 @@ def run_permanent_scrape_pool(
     try:
         while True:
             time.sleep(20.0)
-            # Relance un brand worker mort OU coincé (hang Playwright)
-            stuck_after = 100.0
+            # Au-dessus du pire cas catalog (CALL_TIMEOUT ~55s × 2 retries + marge).
+            # Un seuil trop bas tue le worker EN PLEIN scrape → spiral Chromium/OOM.
+            stuck_after = 200.0
             for idx, w in enumerate(list(brand_workers)):
                 stuck = w.is_alive() and w.last_activity_age() > stuck_after
                 if w.is_alive() and not stuck:
@@ -618,6 +619,7 @@ def run_permanent_scrape_pool(
                     ),
                 )
                 w.stop()
+                w.join(timeout=20.0)
                 proxy = assign_proxy_for_worker(proxies, w.worker_id)
                 # Recharge les cibles (salons / yaml peuvent changer)
                 fresh = active_searches_for_channels(
