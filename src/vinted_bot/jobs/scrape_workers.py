@@ -281,6 +281,9 @@ class BrandWorker:
         self._last_scrape_at: dict[tuple[str, str, tuple[int, ...]], float] = {}
         self._revisit_samples: list[float] = []
         self._last_activity = time.monotonic()
+        self._next_filter_inject_at = 0.0
+        # Worker 0 only injects filters (évite N scrapes filtres si multi-workers)
+        self._inject_filters = worker_id == 0
 
     def last_activity_age(self) -> float:
         return max(0.0, time.monotonic() - self._last_activity)
@@ -364,6 +367,67 @@ class BrandWorker:
         else:
             self._ensure_browser()
         self._successes = 0
+
+    def _inject_filter_targets(self, browser: VintedBrowser) -> None:
+        """Intercale 1–2 cibles filtre dans le Chromium marques (si FilterWorker off)."""
+        if not self._inject_filters:
+            return
+        settings = get_settings()
+        if bool(getattr(settings, "scrape_filter_worker_enabled", False)):
+            return
+        now = time.monotonic()
+        if now < self._next_filter_inject_at:
+            return
+        interval = float(
+            getattr(settings, "private_filter_scrape_interval_seconds", 8.0) or 8.0
+        )
+        interval = max(3.0, interval)
+        from vinted_bot.services.filter_scrape_targets import (
+            get_filter_target_rotator,
+        )
+
+        rotator = get_filter_target_rotator()
+        pending = rotator.size()
+        take = 2 if pending >= 20 else 1
+        batch = rotator.next_batch(take)
+        if not batch:
+            self._next_filter_inject_at = now + interval
+            return
+        for ftarget in batch:
+            if self._stop.is_set():
+                break
+            started = time.monotonic()
+            try:
+                created, posted, found, skipped = _scrape_target(
+                    ftarget,
+                    browser=browser,
+                    headless=self.headless,
+                    max_items=self.max_items,
+                )
+                self._touch()
+                log.info(
+                    "brand_worker_filter_injected",
+                    worker_id=self.worker_id,
+                    brand=ftarget.brand,
+                    query=ftarget.query,
+                    duration_seconds=round(time.monotonic() - started, 2),
+                    created=created,
+                    posted=posted,
+                    found=found,
+                    skipped_deal=skipped,
+                    filter_targets_pending=pending,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._touch()
+                log.warning(
+                    "brand_worker_filter_inject_failed",
+                    worker_id=self.worker_id,
+                    brand=ftarget.brand,
+                    query=ftarget.query,
+                    error=str(exc)[:160],
+                )
+                raise
+        self._next_filter_inject_at = time.monotonic() + interval
 
     def _run(self) -> None:
         if self.start_delay > 0:
@@ -467,6 +531,21 @@ class BrandWorker:
 
                 interval = target_poll_interval_seconds(target)
                 self._next_run[key] = time.monotonic() + interval
+
+                # Filtres privés : 1–2 requêtes intercalées (même Chromium, pas de 2e process)
+                try:
+                    self._inject_filter_targets(browser)
+                except Exception as exc:  # noqa: BLE001
+                    crashed = "crashed" in str(exc).lower() or "Target closed" in str(
+                        exc
+                    )
+                    self._close_browser()
+                    if not crashed:
+                        time.sleep(self.reconnect_delay)
+                    else:
+                        time.sleep(min(2.0, self.reconnect_delay))
+                    browser = self._ensure_browser()
+                    self._touch()
 
                 if self._successes >= self.restart_every:
                     self._recycle_browser(rotate=True)
@@ -725,7 +804,11 @@ def run_permanent_scrape_pool(
         )
         filter_worker.start()
     else:
-        log.info("filter_worker_disabled", reason="scrape_filter_worker_enabled=false")
+        log.info(
+            "filter_worker_disabled",
+            reason="scrape_filter_worker_enabled=false",
+            inject_into_brand_worker=True,
+        )
 
     try:
         while True:

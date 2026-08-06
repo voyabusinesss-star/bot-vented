@@ -169,3 +169,95 @@ def test_is_fresh_listing_recent_only() -> None:
         raw_json={},
     )
     assert is_fresh_listing(no_pub, max_age_seconds=180) is True
+
+
+def test_filter_scrape_targets_dedupe_and_cap() -> None:
+    from vinted_bot.services.filter_scrape_targets import (
+        DEFAULT_FILTER_CAP,
+        active_filter_search_targets,
+    )
+
+    assert DEFAULT_FILTER_CAP >= 40
+    filters = []
+    for i in range(35):
+        filters.append(
+            SimpleNamespace(
+                id=i,
+                brand="Nike",
+                model="TN",
+                category="chaussures",
+                keyword=None,
+                min_price_eur=None,
+                max_price_eur=40.0,
+                is_active=True,
+            )
+        )
+    # Même requête → 1 seule cible
+    targets = active_filter_search_targets(max_targets=50, filters=filters)
+    assert len(targets) == 1
+    assert targets[0].source == "user_filter"
+    assert targets[0].priority == "low"
+
+    # Requêtes distinctes → plafonnées
+    varied = [
+        SimpleNamespace(
+            id=i,
+            brand="Nike",
+            model=f"model-{i}",
+            category="chaussures",
+            keyword=None,
+            min_price_eur=None,
+            max_price_eur=None,
+            is_active=True,
+        )
+        for i in range(60)
+    ]
+    capped = active_filter_search_targets(max_targets=40, filters=varied)
+    assert len(capped) == 40
+
+
+def test_filter_target_rotator_round_robin() -> None:
+    from vinted_bot.services.filter_scrape_targets import FilterTargetRotator
+
+    filters = [
+        SimpleNamespace(
+            id=i,
+            brand="Adidas",
+            model=f"m{i}",
+            category=None,
+            keyword=None,
+            min_price_eur=None,
+            max_price_eur=None,
+            is_active=True,
+        )
+        for i in range(5)
+    ]
+    rotator = FilterTargetRotator(max_targets=10, refresh_seconds=3600)
+    # Force load
+    with rotator._lock:
+        from vinted_bot.services.filter_scrape_targets import active_filter_search_targets
+
+        rotator._targets = active_filter_search_targets(
+            max_targets=10, filters=filters
+        )
+        rotator._loaded_at = 10**9
+        rotator._idx = 0
+    first = rotator.next_batch(2)
+    second = rotator.next_batch(2)
+    assert len(first) == 2
+    assert len(second) == 2
+    keys = {(t.query, tuple(t.brand_ids)) for t in first + second}
+    assert len(keys) == 4
+
+
+def test_enqueue_spill_threshold_constant() -> None:
+    from vinted_bot.services import private_alert_queue as q
+
+    assert q._SPILL_THRESHOLD == int(q._QUEUE_MAX * 0.8)
+    assert q._QUEUE_MAX == 5000
+
+
+def test_retention_keeps_filter_alerts_14_days() -> None:
+    from vinted_bot.jobs.db_retention import USER_FILTER_ALERTS_KEEP_DAYS
+
+    assert USER_FILTER_ALERTS_KEEP_DAYS == 14.0

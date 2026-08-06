@@ -18,7 +18,9 @@ from vinted_bot.db.models import (
     DiscordOutbox,
     Listing,
     ListingObservation,
+    PrivateAlertOutbox,
     ScrapeRun,
+    UserFilterAlert,
 )
 from vinted_bot.db.session import get_engine, session_scope
 from vinted_bot.utils.logging import get_logger
@@ -34,6 +36,9 @@ OUTBOX_KEEP_HOURS = 2.0
 OBSERVATIONS_KEEP_HOURS = 1.0
 SCRAPE_RUNS_KEEP_HOURS = 24.0
 ENTITIES_KEEP_HOURS = 24.0
+# Dedup DM : fraîcheur ~15 min ; 14j = marge anti re-spam sans bloat 500 Mo
+USER_FILTER_ALERTS_KEEP_DAYS = 14.0
+PRIVATE_ALERT_OUTBOX_KEEP_HOURS = 24.0
 BATCH_SIZE = 800
 # Volume Railway = 500 Mo → alerte avant saturation.
 DB_WARN_BYTES = 400 * 1024 * 1024
@@ -131,6 +136,8 @@ def run_db_retention_once() -> dict[str, int]:
         "photos_deleted": 0,
         "entities_deleted": 0,
         "scrape_runs_deleted": 0,
+        "filter_alerts_deleted": 0,
+        "private_outbox_deleted": 0,
         "db_mb_before": 0,
         "db_mb_after": 0,
     }
@@ -138,6 +145,9 @@ def run_db_retention_once() -> dict[str, int]:
     before = get_database_size_bytes()
     if before is not None:
         stats["db_mb_before"] = int(before // (1024 * 1024))
+
+    alerts_cutoff = now - timedelta(days=USER_FILTER_ALERTS_KEEP_DAYS)
+    private_outbox_cutoff = now - timedelta(hours=PRIVATE_ALERT_OUTBOX_KEEP_HOURS)
 
     with session_scope() as session:
         # Null raw_json par petits lots (évite de lock toute la table)
@@ -173,6 +183,19 @@ def run_db_retention_once() -> dict[str, int]:
             )
         )
         stats["outbox_deleted"] = int(res.rowcount or 0)
+
+        res = session.execute(
+            delete(UserFilterAlert).where(UserFilterAlert.sent_at < alerts_cutoff)
+        )
+        stats["filter_alerts_deleted"] = int(res.rowcount or 0)
+
+        res = session.execute(
+            delete(PrivateAlertOutbox).where(
+                (PrivateAlertOutbox.status != "pending")
+                | (PrivateAlertOutbox.enqueued_at < private_outbox_cutoff)
+            )
+        )
+        stats["private_outbox_deleted"] = int(res.rowcount or 0)
 
         res = session.execute(
             delete(ListingObservation).where(
@@ -265,6 +288,8 @@ def run_db_retention_once() -> dict[str, int]:
                 "listing_observations",
                 "listing_entities",
                 "discord_outbox",
+                "private_alert_outbox",
+                "user_filter_alerts",
                 "scrape_runs",
             ):
                 try:
@@ -302,6 +327,7 @@ class DbRetentionWorker:
             interval=self.interval_seconds,
             listings_keep_hours=LISTINGS_KEEP_HOURS,
             raw_keep_hours=RAW_JSON_KEEP_HOURS,
+            filter_alerts_keep_days=USER_FILTER_ALERTS_KEEP_DAYS,
             warn_mb=DB_WARN_BYTES // (1024 * 1024),
         )
 

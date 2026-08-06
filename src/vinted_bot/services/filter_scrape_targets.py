@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 import unicodedata
 from typing import Any, Sequence
 
@@ -13,7 +15,11 @@ from vinted_bot.utils.logging import get_logger
 
 log = get_logger(__name__)
 
-DEFAULT_FILTER_CAP = 15
+# Cap global de cibles Vinted dédupliquées (pas de scrape parallèle).
+# Injectées 1–2 à la fois dans le BrandWorker unique (anti-OOM).
+DEFAULT_FILTER_CAP = 50
+FILTER_INJECT_PER_PULSE = 1
+FILTER_TARGETS_REFRESH_SECONDS = 60.0
 CLOTHING_CATALOG_IDS = [4, 5]
 SHOE_CATALOG_IDS = [1231, 1242]
 
@@ -110,7 +116,7 @@ def filter_row_to_search_target(
         brand=brand_label,
         query=query or brand_label,
         enabled=True,
-        priority="high",
+        priority="low",  # ne pas affamer les marques YAML si fusionnées
         brand_ids=brand_ids,
         catalog_ids=catalog_ids,
         order="newest_first",
@@ -177,7 +183,77 @@ def active_filter_search_targets(
     log.info(
         "filter_scrape_targets",
         count=len(out),
-        queries=[t.query for t in out],
-        brands=[t.brand for t in out],
+        active_filters=len(filters),
+        queries=[t.query for t in out[:12]],
+        brands=[t.brand for t in out[:12]],
     )
     return out
+
+
+class FilterTargetRotator:
+    """Round-robin des cibles filtre pour injection dans le BrandWorker (1 Chromium)."""
+
+    def __init__(
+        self,
+        *,
+        max_targets: int = DEFAULT_FILTER_CAP,
+        refresh_seconds: float = FILTER_TARGETS_REFRESH_SECONDS,
+    ) -> None:
+        self.max_targets = max(1, int(max_targets))
+        self.refresh_seconds = max(15.0, float(refresh_seconds))
+        self._lock = threading.Lock()
+        self._targets: list[SearchTarget] = []
+        self._idx = 0
+        self._loaded_at = 0.0
+
+    def _refresh_locked(self) -> None:
+        now = time.monotonic()
+        if self._targets and (now - self._loaded_at) < self.refresh_seconds:
+            return
+        try:
+            self._targets = active_filter_search_targets(max_targets=self.max_targets)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("filter_targets_refresh_failed", error=str(exc)[:160])
+            if not self._targets:
+                self._targets = []
+            return
+        self._loaded_at = now
+        if self._idx >= len(self._targets):
+            self._idx = 0
+        log.info(
+            "filter_targets_refreshed",
+            count=len(self._targets),
+            max_targets=self.max_targets,
+        )
+
+    def next_batch(self, n: int = FILTER_INJECT_PER_PULSE) -> list[SearchTarget]:
+        """Retourne jusqu'à n cibles (round-robin), liste vide si aucun filtre."""
+        take = max(0, int(n))
+        if take <= 0:
+            return []
+        with self._lock:
+            self._refresh_locked()
+            if not self._targets:
+                return []
+            out: list[SearchTarget] = []
+            for _ in range(min(take, len(self._targets))):
+                out.append(self._targets[self._idx % len(self._targets)])
+                self._idx = (self._idx + 1) % len(self._targets)
+            return out
+
+    def size(self) -> int:
+        with self._lock:
+            self._refresh_locked()
+            return len(self._targets)
+
+
+_rotator: FilterTargetRotator | None = None
+_rotator_lock = threading.Lock()
+
+
+def get_filter_target_rotator() -> FilterTargetRotator:
+    global _rotator
+    with _rotator_lock:
+        if _rotator is None:
+            _rotator = FilterTargetRotator()
+        return _rotator

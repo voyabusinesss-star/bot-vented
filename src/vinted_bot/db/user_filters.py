@@ -9,6 +9,9 @@ from sqlalchemy.orm import Session
 
 from vinted_bot.db.models import DiscordMemberPlan, UserFilter, UserFilterAlert
 
+# Plafonds filtres privés (produit) — ne pas changer sans sync marketing Nos offres.
+# Starter = 0 (upsell) · Pro = 10 · Pro+ = 30. Matching OK à 30/user ;
+# le scale scrape/DM est géré hors de ces plafonds (scheduler 1-Chromium + outbox).
 # Clés internes : starter / premium(=Pro) / elite(=Pro+)
 PLAN_LIMITS: dict[str, int | None] = {
     "starter": 0,  # aucun filtre privé (offre marketing)
@@ -261,6 +264,26 @@ def already_alerted(
         )
     )
     return row is not None
+
+
+def list_alerted_pairs(
+    session: Session,
+    *,
+    filter_ids: Sequence[int],
+    vinted_ids: Sequence[int],
+) -> set[tuple[int, int]]:
+    """Charge en une requête les couples (filter_id, vinted_id) déjà alertés."""
+    fids = [int(x) for x in filter_ids if x is not None]
+    vids = [int(x) for x in vinted_ids if x is not None]
+    if not fids or not vids:
+        return set()
+    rows = session.execute(
+        select(UserFilterAlert.filter_id, UserFilterAlert.vinted_id).where(
+            UserFilterAlert.filter_id.in_(fids),
+            UserFilterAlert.vinted_id.in_(vids),
+        )
+    ).all()
+    return {(int(fid), int(vid)) for fid, vid in rows}
 
 
 def record_filter_alert(

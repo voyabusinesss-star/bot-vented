@@ -435,6 +435,32 @@ class UserFilterAlert(Base):
     )
 
 
+class PrivateAlertOutbox(Base):
+    """Spill Postgres des DM filtres privés (si file mémoire saturée)."""
+
+    __tablename__ = "private_alert_outbox"
+    __table_args__ = (
+        UniqueConstraint(
+            "filter_id",
+            "vinted_id",
+            name="uq_private_alert_outbox_filter_vinted",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    filter_id: Mapped[int] = mapped_column(Integer, index=True)
+    discord_user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    vinted_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    listing_id: Mapped[int] = mapped_column(Integer, default=0)
+    title: Mapped[str] = mapped_column(String(255), default="")
+    url: Mapped[str] = mapped_column(Text, default="")
+    payload_json: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    enqueued_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
 class VintedLinkToken(Base):
     """Lien temporaire Discord → page de connexion Vinted (self-service)."""
 

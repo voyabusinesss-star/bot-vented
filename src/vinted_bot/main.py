@@ -626,6 +626,7 @@ def cmd_setup_reglement_gates(log) -> None:
     from vinted_bot.services.reglement_gates import (
         apply_reglement_gates,
         ensure_membre_role,
+        resolve_membre_preview_channel_ids,
         resolve_public_channel_ids,
     )
 
@@ -649,17 +650,20 @@ def cmd_setup_reglement_gates(log) -> None:
 
     with DiscordInteractionClient(settings) as client:
         role_id = ensure_membre_role(client, guild_id)
+        preview_ids = resolve_membre_preview_channel_ids(settings)
         stats = apply_reglement_gates(
             client,
             guild_id=guild_id,
             member_role_id=role_id,
             public_channel_ids=public_ids,
+            preview_channel_ids=preview_ids,
         )
         log.info("reglement_gates_setup", role_id=role_id, **stats)
         print(
             f"OK — verrouillage appliqué (rôle Membre {role_id})\n"
-            f"  Salons publics (@everyone + Membre) : {stats['public']}\n"
-            f"  Salons verrouillés (Membre) : {stats['gated']}\n"
+            f"  Salons publics (@everyone) : {stats['public']}\n"
+            f"  Aperçu Membre (règlement) : {stats['gated']}\n"
+            f"  Réservés abo (Starter+) : {stats.get('denied', 0)}\n"
             f"  Mis à jour : {stats['updated']} · Échecs : {stats.get('failed', 0)}"
         )
 

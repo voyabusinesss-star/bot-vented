@@ -285,6 +285,11 @@ class Settings(BaseSettings):
     discord_role_sub_proplus: str = ""
     # Catégorie réservée Pro / Pro+ (Starter : pas d'accès)
     discord_category_private_tools: str = ""
+    # Catégories visibles avec le rôle Membre (après règlement, avant Whop)
+    discord_category_accueil: str = ""
+    discord_category_rejoindre: str = ""
+    discord_category_support: str = ""
+    discord_category_avant_gout: str = ""
     # Message règlement existant (post-reglement --attach)
     discord_reglement_message_id: str = ""
     # Salon alertes niches (fallback / combos)

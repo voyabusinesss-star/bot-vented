@@ -354,14 +354,21 @@ def find_private_matches(listings: Sequence[Listing]) -> list[PrivateMatch]:
         getattr(settings, "private_filter_max_age_seconds", 180.0) or 180.0
     )
     matches: list[PrivateMatch] = []
+    fresh_listings = [
+        listing
+        for listing in listings
+        if is_fresh_listing(listing, max_age_seconds=max_age)
+    ]
+    if not fresh_listings:
+        return []
+
     with session_scope() as session:
         filters = list_all_active_filters(session)
         if not filters:
             return []
-        # Numéros affichés par user (tous filtres, ordre id)
         from collections import defaultdict
 
-        from vinted_bot.db.user_filters import list_user_filters
+        from vinted_bot.db.user_filters import list_alerted_pairs, list_user_filters
 
         ordinals: dict[tuple[int, int], int] = {}
         by_user: dict[int, list[int]] = defaultdict(list)
@@ -370,7 +377,7 @@ def find_private_matches(listings: Sequence[Listing]) -> list[PrivateMatch]:
         for uid in by_user:
             for idx, row in enumerate(list_user_filters(session, uid), start=1):
                 ordinals[(uid, int(row.id))] = idx
-        # détacher filtres
+
         filt_data = [
             (
                 f.id,
@@ -385,8 +392,12 @@ def find_private_matches(listings: Sequence[Listing]) -> list[PrivateMatch]:
             )
             for f in filters
         ]
+        filter_ids = [int(f.id) for f in filters if f.is_active]
+        vinted_ids = [int(listing.vinted_id) for listing in fresh_listings]
+        alerted = list_alerted_pairs(
+            session, filter_ids=filter_ids, vinted_ids=vinted_ids
+        )
 
-    # Reconstruire objets légers pour matching hors session filtres
     class _F:
         pass
 
@@ -415,17 +426,13 @@ def find_private_matches(listings: Sequence[Listing]) -> list[PrivateMatch]:
         f.min_price_eur = min_p
         rebuilt.append((f, fid, uid))
 
-    for listing in listings:
-        if not is_fresh_listing(listing, max_age_seconds=max_age):
-            continue
+    for listing in fresh_listings:
+        vid = int(listing.vinted_id)
         for f, fid, uid in rebuilt:
+            if (fid, vid) in alerted:
+                continue
             if not listing_matches_filter(listing, f):  # type: ignore[arg-type]
                 continue
-            with session_scope() as session:
-                if already_alerted(
-                    session, filter_id=fid, vinted_id=int(listing.vinted_id)
-                ):
-                    continue
             market = _estimate_market_eur(listing)
             matches.append(
                 PrivateMatch(
@@ -437,6 +444,13 @@ def find_private_matches(listings: Sequence[Listing]) -> list[PrivateMatch]:
                     display_number=ordinals.get((uid, fid), 1),
                 )
             )
+    log.info(
+        "private_matches_scanned",
+        listings=len(fresh_listings),
+        active_filters=len(rebuilt),
+        matches=len(matches),
+        alerted_pairs=len(alerted),
+    )
     return matches
 
 
@@ -493,8 +507,19 @@ def send_private_filter_alerts(listings: Sequence[Listing]) -> int:
                 discord_user_id=match.discord_user_id,
                 filter_id=match.filter_id,
                 vinted_id=listing.vinted_id,
+                queue_depth=_queue_size_safe(),
+                matches_enqueued=queued,
             )
     return queued
+
+
+def _queue_size_safe() -> int:
+    try:
+        from vinted_bot.services.private_alert_queue import queue_size
+
+        return queue_size()
+    except Exception:  # noqa: BLE001
+        return 0
 
 
 def _filter_display_title(row: UserFilter) -> str:
