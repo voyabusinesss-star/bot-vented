@@ -16,7 +16,7 @@ from vinted_bot.services.scrape_search import listing_discord_sort_key
 
 
 def test_salon_matrix_brand_and_all() -> None:
-    """Carhartt sweat → brand + ALL ; Ami sac → brand only ; Jordan shoe → sneakers."""
+    """Carhartt / Ami indémodables → brand + ALL ; Jordan shoe → sneakers only."""
     clothing = {"carhartt": "ch-carhartt", "ami": "ch-ami", "nike": "ch-nike"}
     sneakers = {"jordan": "ch-jordan", "nike": "ch-nike-snk"}
     sneaker_ids = set(sneakers.values())
@@ -32,14 +32,12 @@ def test_salon_matrix_brand_and_all() -> None:
             is_shoe=False,
             brand_channel_id="ch-carhartt",
             sneaker_channel_ids=sneaker_ids,
-            is_vetement=True,
         )
         is True
     )
 
-    # Ami sac → salon marque OK, pas ALL (non-vêtement)
+    # Ami sac → salon marque + ALL (tout post indémodable)
     assert route_channel("Ami", clothing, sneaker_map=sneakers, is_shoe=False) == "ch-ami"
-    assert is_vetement_for_all("Sac bandoulière Ami Paris", None) is False
     assert (
         belongs_in_all_vetement(
             "Ami",
@@ -47,6 +45,17 @@ def test_salon_matrix_brand_and_all() -> None:
             brand_channel_id="ch-ami",
             sneaker_channel_ids=sneaker_ids,
             is_vetement=False,
+        )
+        is True
+    )
+
+    # Luxe → pas ALL
+    assert (
+        belongs_in_all_vetement(
+            "Louis Vuitton",
+            is_shoe=False,
+            brand_channel_id="ch-lv",
+            sneaker_channel_ids=sneaker_ids,
         )
         is False
     )
@@ -62,7 +71,6 @@ def test_salon_matrix_brand_and_all() -> None:
             is_shoe=True,
             brand_channel_id="ch-jordan",
             sneaker_channel_ids=sneaker_ids,
-            is_vetement=False,
         )
         is False
     )

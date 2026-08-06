@@ -24,8 +24,8 @@ settings:
   require_category_match: false
   # Titre ambigu → fallback prix médian marque (ne rate pas l'annonce)
   use_category_fallback: true
-  # Fenêtre large pour ne pas rater le frais entre 2 tours
-  max_listing_age_minutes: 180
+  # Annonces > 45 min = trop vieilles pour Discord (flux temps réel)
+  max_listing_age_minutes: 45
   # Filtre enfant (titre + taille uniquement — pas de photos / description)
   reject_kids: true
   # Pas de chaussures sauf marques avec allow_shoes: true (luxe)

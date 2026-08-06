@@ -233,8 +233,8 @@ def test_shoes_allowed_for_luxury() -> None:
 
 
 def test_evaluate_reject_too_old() -> None:
-    # max_listing_age_minutes = 180 dans deal_filters.yaml
-    old_ts = (datetime.now(timezone.utc) - timedelta(hours=4)).timestamp()
+    # max_listing_age_minutes = 45 dans deal_filters.yaml
+    old_ts = (datetime.now(timezone.utc) - timedelta(hours=2)).timestamp()
     deal = evaluate_deal(
         brand="Stone Island",
         title="Sweat Stone Island vintage",

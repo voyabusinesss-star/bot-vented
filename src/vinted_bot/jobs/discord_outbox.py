@@ -19,7 +19,6 @@ from vinted_bot.notify.discord import (
     belongs_in_all_vetement,
     build_listing_payload,
     is_classique_brand,
-    is_vetement_for_all,
     route_channel,
 )
 from vinted_bot.utils.logging import get_logger
@@ -29,8 +28,28 @@ log = get_logger(__name__)
 OUTBOX_STATUS_PENDING = "pending"
 OUTBOX_STATUS_SENT = "sent"
 OUTBOX_STATUS_FAILED = "failed"
+OUTBOX_STATUS_SKIPPED = "skipped"
 KIND_BRAND = "brand"
 KIND_ALL = "all"
+
+
+def _max_listing_age_minutes() -> int | None:
+    try:
+        from vinted_bot.services.deal_filter import load_deal_filters
+
+        return load_deal_filters().settings.max_listing_age_minutes
+    except Exception:  # noqa: BLE001
+        return 45
+
+
+def _is_stale_published_at(published_at: datetime | None, max_age_minutes: int | None) -> bool:
+    if max_age_minutes is None or published_at is None:
+        return False
+    pub = _as_aware(published_at)
+    if pub is None:
+        return False
+    age_m = (_utcnow() - pub).total_seconds() / 60.0
+    return age_m > float(max_age_minutes)
 
 
 def _utcnow() -> datetime:
@@ -82,13 +101,16 @@ def resolve_discord_channels(listing: Listing) -> tuple[str | None, str | None, 
         return None, None, is_shoe
 
     all_channel = sanitize_discord_channel_id(settings.discord_channel_all)
-    is_vetement = is_vetement_for_all(listing.title, category)
-    mirror_all = bool(all_channel) and all_channel != brand_channel_id and belongs_in_all_vetement(
-        listing.brand,
-        is_shoe=is_shoe,
-        brand_channel_id=brand_channel_id,
-        sneaker_channel_ids=sneaker_ids,
-        is_vetement=is_vetement,
+    # Indémodables → toujours mirror ALL (sacs/accessoires inclus)
+    mirror_all = (
+        bool(all_channel)
+        and all_channel != brand_channel_id
+        and belongs_in_all_vetement(
+            listing.brand,
+            is_shoe=is_shoe,
+            brand_channel_id=brand_channel_id,
+            sneaker_channel_ids=sneaker_ids,
+        )
     )
     return brand_channel_id, (all_channel if mirror_all else None), is_shoe
 
@@ -126,6 +148,15 @@ def enqueue_listings_for_discord(listings: Sequence[Listing]) -> list[int]:
             published = _as_aware(listing.published_at) or _as_aware(
                 listing.first_seen_at
             ) or now
+            if _is_stale_published_at(published, _max_listing_age_minutes()):
+                log.info(
+                    "outbox_skip_stale",
+                    brand=listing.brand,
+                    vinted_id=listing.vinted_id,
+                    published_at=published.isoformat(),
+                )
+                mark_discord_posted(session, [listing.id])
+                continue
 
             def _enqueue(channel_id: str, kind: str) -> bool:
                 exists = session.scalar(
@@ -196,9 +227,33 @@ def flush_discord_outbox(
         )
         if not rows:
             return 0
+
+        max_age = _max_listing_age_minutes()
+        fresh_rows: list[DiscordOutbox] = []
+        skipped_listing_ids: list[int] = []
+        skipped_count = 0
+        for row in rows:
+            if _is_stale_published_at(row.published_at, max_age):
+                row.status = OUTBOX_STATUS_SKIPPED
+                skipped_count += 1
+                if row.kind == KIND_BRAND:
+                    skipped_listing_ids.append(int(row.listing_id))
+                continue
+            fresh_rows.append(row)
+        if skipped_count:
+            log.info(
+                "discord_outbox_skipped_stale",
+                count=skipped_count,
+                max_age_minutes=max_age,
+            )
+        if skipped_listing_ids:
+            mark_discord_posted(session, skipped_listing_ids)
+        if not fresh_rows:
+            return 0
+
         # Cap per channel
         by_channel: dict[str, list[DiscordOutbox]] = {}
-        for row in rows:
+        for row in fresh_rows:
             bucket = by_channel.setdefault(row.channel_id, [])
             if len(bucket) < max_per_channel:
                 bucket.append(row)

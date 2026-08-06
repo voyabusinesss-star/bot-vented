@@ -203,11 +203,13 @@ def belongs_in_all_vetement(
     sneaker_channel_ids: set[str] | None = None,
     is_vetement: bool = True,
 ) -> bool:
-    """#all-vetement = indémodables vêtements seulement.
+    """#all-vetement = tout ce qui va en salon indémodable.
 
-    Exclus : chaussures, objets non-vêtements, salons Pépites Sneakers, luxe.
+    Règle : salon marque classique (hors chaussure / sneakers / luxe) → ALL aussi.
+    ``is_vetement`` est conservé pour compat tests, mais n'exclut plus (sacs Ami etc.).
     """
-    if is_shoe or not is_vetement:
+    del is_vetement  # compat signature — plus de filtre titre/catégorie
+    if is_shoe:
         return False
     if brand_channel_id and sneaker_channel_ids and brand_channel_id in sneaker_channel_ids:
         return False
@@ -892,14 +894,16 @@ class DiscordNotifier:
         self.post_message(brand_channel_id, payload)
 
         all_channel = sanitize_discord_channel_id(self.settings.discord_channel_all)
-        # #all-vetement = indémodables vêtements seulement (règle unique).
-        is_vetement = is_vetement_for_all(listing.title, category)
-        mirror_all = bool(all_channel) and all_channel != brand_channel_id and belongs_in_all_vetement(
-            listing.brand,
-            is_shoe=is_shoe,
-            brand_channel_id=brand_channel_id,
-            sneaker_channel_ids=sneaker_ids,
-            is_vetement=is_vetement,
+        # Salon indémodable → toujours #all-vetement (hors chaussure / sneakers / luxe)
+        mirror_all = (
+            bool(all_channel)
+            and all_channel != brand_channel_id
+            and belongs_in_all_vetement(
+                listing.brand,
+                is_shoe=is_shoe,
+                brand_channel_id=brand_channel_id,
+                sneaker_channel_ids=sneaker_ids,
+            )
         )
         if mirror_all:
             try:
