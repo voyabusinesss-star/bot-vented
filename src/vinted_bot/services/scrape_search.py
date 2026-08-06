@@ -278,23 +278,41 @@ def scrape_search_once(
             items=items,
         )
 
-    # Live : Discord uniquement pour les VRAIES nouvelles (inserts de ce run)
+    # Live : annonces pas encore postées parmi la page courante (inserts + déjà en DB).
     # Filtre deal (marque×catégorie×prix) puis plafond de posts.
     deal_cfg = load_deal_filters()
     skipped_deal = 0
+    # Rejets « durs » : on marque posté pour ne jamais réessayer.
+    # Rejets « soft » (prix/score) : on laisse discord_posted_at NULL pour
+    # republier si les plafonds changent ou si le score passe.
+    _HARD_REJECT_REASONS = frozenset(
+        {
+            "kids_item",
+            "replica",
+            "shoes_not_allowed",
+            "not_a_shoe",
+            "too_old",
+            "brand_not_configured",
+            "category_not_matched",
+            "channel_or_token_missing",
+        }
+    )
     with session_scope() as session:
-        to_post = get_unposted_listings_by_vinted_ids(session, created_vinted_ids)
+        # Page courante entière : rattrape les deals ratés (ex. max_buy trop bas avant)
+        candidate_ids = list(dict.fromkeys([*created_vinted_ids, *all_vinted_ids]))
+        to_post = get_unposted_listings_by_vinted_ids(session, candidate_ids)
         to_post.sort(key=lambda listing: listing.vinted_id, reverse=True)
 
         qualified: list[tuple[Any, Any]] = []
-        rejected_ids: list[int] = []
+        hard_reject_ids: list[int] = []
         for listing in to_post:
             deal = evaluate_listing(listing, config=deal_cfg)
             if deal.should_post:
                 qualified.append((listing, deal))
             else:
-                rejected_ids.append(listing.id)
                 skipped_deal += 1
+                if deal.reason in _HARD_REJECT_REASONS:
+                    hard_reject_ids.append(listing.id)
                 log.info(
                     "deal_filter_skipped",
                     vinted_id=listing.vinted_id,
@@ -325,7 +343,9 @@ def scrape_search_once(
             session.expunge(listing)
             announce.append(listing)
 
-        silent_ids = rejected_ids + [listing.id for listing, _ in capped]
+        # Cap dépassés : marqués pour éviter de spammer le même trop plein
+        # Soft rejects (price_above_max, score_too_low) : PAS marqués
+        silent_ids = hard_reject_ids + [listing.id for listing, _ in capped]
         if silent_ids:
             mark_discord_posted(session, silent_ids)
             log.info(
@@ -333,6 +353,7 @@ def scrape_search_once(
                 query=query,
                 skipped_deal=skipped_deal,
                 skipped_cap=len(capped),
+                hard_rejects=len(hard_reject_ids),
                 posted_cap=post_cap,
                 qualified=len(qualified),
             )
