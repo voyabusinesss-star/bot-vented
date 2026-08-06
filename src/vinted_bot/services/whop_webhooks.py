@@ -26,7 +26,21 @@ _recent_reglement: dict[int, float] = {}
 _recent_reglement_lock = threading.Lock()
 _RECENT_REGLEMENT_TTL_SECONDS = 45 * 60
 
+# Clics « Lien Starter/Pro/Pro+ » → (plan interne, timestamp) pour lier le webhook
+_checkout_intents: dict[int, tuple[str, float]] = {}
+_checkout_intents_lock = threading.Lock()
+_CHECKOUT_INTENT_TTL_SECONDS = 45 * 60
+
 _SIGNATURE_TOLERANCE_SECONDS = 300
+
+_TIER_TO_INTERNAL_PLAN = {
+    "starter": "starter",
+    "pro": "premium",
+    "premium": "premium",
+    "proplus": "elite",
+    "pro+": "elite",
+    "elite": "elite",
+}
 
 
 def note_reglement_accepted(discord_user_id: int) -> None:
@@ -58,6 +72,59 @@ def recent_reglement_candidates(*, within_seconds: int | None = None) -> list[in
             (uid, ts)
             for uid, ts in _recent_reglement.items()
             if now - ts <= ttl
+        ]
+    items.sort(key=lambda x: x[1], reverse=True)
+    return [uid for uid, _ in items]
+
+
+def normalize_checkout_plan(tier_or_plan: str) -> str:
+    """starter/pro/proplus (boutons) → plan interne starter/premium/elite."""
+    key = (tier_or_plan or "").strip().lower()
+    return _TIER_TO_INTERNAL_PLAN.get(key, key)
+
+
+def note_checkout_intent(discord_user_id: int, tier_or_plan: str) -> None:
+    """Mémorise un clic Lien abo (parcours principal sans metadata Whop)."""
+    try:
+        uid = int(discord_user_id)
+    except (TypeError, ValueError):
+        return
+    plan = normalize_checkout_plan(tier_or_plan)
+    if uid <= 0 or plan not in {"starter", "premium", "elite"}:
+        return
+    with _checkout_intents_lock:
+        now = time.time()
+        _checkout_intents[uid] = (plan, now)
+        expired = [
+            k
+            for k, (_p, ts) in _checkout_intents.items()
+            if now - ts > _CHECKOUT_INTENT_TTL_SECONDS
+        ]
+        for k in expired:
+            _checkout_intents.pop(k, None)
+    log.info("whop_checkout_intent_noted", discord_user_id=uid, plan=plan)
+
+
+def pop_checkout_intent(discord_user_id: int) -> str | None:
+    with _checkout_intents_lock:
+        row = _checkout_intents.pop(int(discord_user_id), None)
+    return row[0] if row else None
+
+
+def recent_checkout_intent_candidates(
+    plan: str,
+    *,
+    within_seconds: int | None = None,
+) -> list[int]:
+    """IDs Discord ayant cliqué Lien pour ce plan récemment (plus récent en premier)."""
+    want = normalize_checkout_plan(plan)
+    ttl = within_seconds or _CHECKOUT_INTENT_TTL_SECONDS
+    now = time.time()
+    with _checkout_intents_lock:
+        items = [
+            (uid, ts)
+            for uid, (p, ts) in _checkout_intents.items()
+            if p == want and now - ts <= ttl
         ]
     items.sort(key=lambda x: x[1], reverse=True)
     return [uid for uid, _ in items]
@@ -661,17 +728,21 @@ def create_checkout_url_for_discord(
         "elite": str(getattr(s, "subscriptions_checkout_proplus", "") or "").strip(),
     }
     static_url = static_by_tier.get(tier_n, "")
+    if not static_url:
+        plan_id_for_static = resolve_whop_plan_id(tier_n, settings=s)
+        if plan_id_for_static:
+            static_url = f"https://whop.com/checkout/{plan_id_for_static}"
+
     headers = _whop_api_headers(s)
-    company_id = resolve_whop_company_id(s)
     plan_id = resolve_whop_plan_id(tier_n, settings=s)
 
-    if headers and company_id and plan_id:
+    # company_id ne doit PAS être envoyé avec une company API key (Whop 400).
+    if headers and plan_id:
         try:
             response = httpx.post(
                 "https://api.whop.com/api/v1/checkout_configurations",
                 headers=headers,
                 json={
-                    "company_id": company_id,
                     "plan_id": plan_id,
                     "metadata": {
                         "discord_id": str(int(discord_user_id)),
@@ -715,18 +786,124 @@ def create_checkout_url_for_discord(
             status=response.status_code,
             body=response.text[:200],
             plan_id=plan_id,
-            company_id=company_id,
         )
         return static_url or None, f"Whop HTTP {response.status_code}"
 
     missing = []
     if not headers:
         missing.append("WHOP_API_KEY")
-    if not company_id:
-        missing.append("company/plan")
     if not plan_id:
         missing.append("plan_id")
     return static_url or None, "missing:" + ",".join(missing) if missing else None
+
+
+def _activate_from_auto_claim(
+    *,
+    discord_user_id: int,
+    membership_id: str | None,
+    plan: str,
+    product_id: str | None,
+    email: str | None,
+    license_key: str | None,
+    settings: Settings,
+    source: str,
+) -> int:
+    activate_subscription(
+        discord_user_id=discord_user_id,
+        plan=plan,
+        membership_id=membership_id,
+        settings=settings,
+    )
+    if membership_id:
+        store_pending_claim(
+            membership_id,
+            plan=plan,
+            product_id=product_id,
+            email=email,
+            license_key=license_key,
+        )
+        try:
+            from vinted_bot.db.session import session_scope
+            from vinted_bot.db.whop_claims import mark_claim_used
+
+            with session_scope() as session:
+                mark_claim_used(
+                    session,
+                    membership_id,
+                    discord_user_id=discord_user_id,
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("whop_auto_claim_mark_failed", error=str(exc)[:120], source=source)
+        pop_pending_claim(membership_id)
+    pop_checkout_intent(discord_user_id)
+    log.info(
+        "whop_auto_claim",
+        source=source,
+        discord_user_id=discord_user_id,
+        membership_id=membership_id,
+        plan=plan,
+        email=email,
+    )
+    return discord_user_id
+
+
+def try_auto_claim_from_checkout_intent(
+    *,
+    membership_id: str | None,
+    plan: str,
+    product_id: str | None,
+    email: str | None = None,
+    license_key: str | None = None,
+    settings: Settings | None = None,
+) -> int | None:
+    """Si exactement 1 clic Lien récent pour ce plan → active le rôle sans metadata Whop."""
+    from sqlalchemy import select
+
+    from vinted_bot.db.models import DiscordMemberPlan
+    from vinted_bot.db.session import session_scope
+
+    s = settings or get_settings()
+    candidates = recent_checkout_intent_candidates(plan, within_seconds=30 * 60)
+    if not candidates:
+        return None
+
+    eligible: list[int] = []
+    try:
+        with session_scope() as session:
+            for uid in candidates:
+                row = session.scalar(
+                    select(DiscordMemberPlan).where(
+                        DiscordMemberPlan.discord_user_id == int(uid)
+                    )
+                )
+                if row is not None and bool(getattr(row, "subscription_active", False)):
+                    continue
+                eligible.append(uid)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("whop_checkout_intent_db_failed", error=str(exc)[:160])
+        eligible = list(candidates)
+
+    if len(eligible) != 1:
+        log.info(
+            "whop_checkout_intent_skip",
+            reason="ambiguous_or_empty",
+            candidates=len(candidates),
+            eligible=len(eligible),
+            membership_id=membership_id,
+            plan=plan,
+        )
+        return None
+
+    return _activate_from_auto_claim(
+        discord_user_id=eligible[0],
+        membership_id=membership_id,
+        plan=plan,
+        product_id=product_id,
+        email=email,
+        license_key=license_key,
+        settings=s,
+        source="checkout_intent",
+    )
 
 
 def try_auto_claim_from_recent_reglement(
@@ -743,7 +920,6 @@ def try_auto_claim_from_recent_reglement(
 
     from vinted_bot.db.models import DiscordMemberPlan
     from vinted_bot.db.session import session_scope
-    from vinted_bot.db.whop_claims import mark_claim_used
 
     s = settings or get_settings()
     candidates = recent_reglement_candidates(within_seconds=30 * 60)
@@ -776,39 +952,16 @@ def try_auto_claim_from_recent_reglement(
         )
         return None
 
-    discord_user_id = eligible[0]
-    activate_subscription(
-        discord_user_id=discord_user_id,
-        plan=plan,
-        membership_id=membership_id,
-        settings=s,
-    )
-    if membership_id:
-        store_pending_claim(
-            membership_id,
-            plan=plan,
-            product_id=product_id,
-            email=email,
-            license_key=license_key,
-        )
-        try:
-            with session_scope() as session:
-                mark_claim_used(
-                    session,
-                    membership_id,
-                    discord_user_id=discord_user_id,
-                )
-        except Exception as exc:  # noqa: BLE001
-            log.warning("whop_auto_claim_mark_failed", error=str(exc)[:120])
-        pop_pending_claim(membership_id)
-    log.info(
-        "whop_auto_claim_from_reglement",
-        discord_user_id=discord_user_id,
+    return _activate_from_auto_claim(
+        discord_user_id=eligible[0],
         membership_id=membership_id,
         plan=plan,
+        product_id=product_id,
         email=email,
+        license_key=license_key,
+        settings=s,
+        source="reglement",
     )
-    return discord_user_id
 
 
 def claim_whop_access(
@@ -1155,6 +1308,16 @@ def handle_whop_event(
                     email=email,
                     license_key=license_key,
                 )
+            auto_uid = try_auto_claim_from_checkout_intent(
+                membership_id=membership_id,
+                plan=plan,
+                product_id=product_id,
+                email=email,
+                license_key=license_key,
+                settings=s,
+            )
+            if auto_uid is not None:
+                return "activated_auto_checkout"
             auto_uid = try_auto_claim_from_recent_reglement(
                 membership_id=membership_id,
                 plan=plan,

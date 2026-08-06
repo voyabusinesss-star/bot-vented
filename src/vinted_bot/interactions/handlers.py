@@ -1104,6 +1104,11 @@ def handle_whop_checkout_button(
             "Impossible d'identifier ton compte Discord.",
         )
         return
+    from vinted_bot.services.whop_webhooks import note_checkout_intent
+
+    # Parcours principal : mémorise le clic pour lier le webhook même sans metadata Whop.
+    note_checkout_intent(user_id, tier)
+
     url, err = create_checkout_url_for_discord(
         tier=tier,
         discord_user_id=user_id,
@@ -1117,13 +1122,13 @@ def handle_whop_checkout_button(
         )
         return
     if err:
-        # Fallback lien statique : rôle auto pas garanti
         client.respond_ephemeral(
             interaction["id"],
             interaction["token"],
-            f"🔗 Lien **{tier.upper()}** :\n{url}\n\n"
-            "⚠️ Lien standard (auto-rôle non garanti). "
-            "Après paiement → **Activer mon accès**.",
+            f"🔗 Ton lien **{tier.upper()}** :\n{url}\n\n"
+            "Paie **avec ce lien** → ton rôle est attribué automatiquement "
+            "(ton clic Discord est déjà mémorisé).\n"
+            "Si le rôle n’arrive pas sous 2 min → **Activer mon accès**.",
         )
         return
     client.respond_ephemeral(

@@ -279,6 +279,56 @@ def test_handle_pending_discord(monkeypatch) -> None:
     assert status == "pending_discord"
 
 
+def test_auto_claim_from_checkout_intent(monkeypatch) -> None:
+    from vinted_bot.services import whop_webhooks as wh
+
+    wh._checkout_intents.clear()
+    wh.note_checkout_intent(42, "pro")
+
+    calls = {"activate": 0}
+
+    def fake_activate(**kw):
+        calls["activate"] += 1
+        assert kw["discord_user_id"] == 42
+        assert kw["plan"] == "premium"
+
+    class _Session:
+        def scalar(self, *_a, **_k):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+    monkeypatch.setattr(wh, "activate_subscription", fake_activate)
+    monkeypatch.setattr("vinted_bot.db.session.session_scope", lambda: _Session())
+    monkeypatch.setattr(wh, "store_pending_claim", lambda *a, **k: None)
+    monkeypatch.setattr(wh, "pop_pending_claim", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "vinted_bot.db.whop_claims.mark_claim_used",
+        lambda *a, **k: None,
+    )
+
+    settings = SimpleNamespace(
+        whop_product_starter="",
+        whop_product_pro="prod_pro",
+        whop_product_proplus="",
+        discord_role_resello_vip="1",
+        discord_guild_id="2",
+        discord_bot_token="",
+    )
+    status = handle_whop_event(
+        "membership.activated",
+        {"id": "mem_intent", "product": {"id": "prod_pro"}, "email": "a@b.com"},
+        settings=settings,
+    )
+    assert status == "activated_auto_checkout"
+    assert calls["activate"] == 1
+    assert 42 not in wh._checkout_intents
+
+
 def test_roles_for_plan_exclusive() -> None:
     settings = SimpleNamespace(
         discord_role_sub_starter="111",
