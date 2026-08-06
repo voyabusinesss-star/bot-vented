@@ -147,11 +147,18 @@ def _pick_due_target(
             due.append((when, target))
     if not due:
         return None
-    # High d'abord (fraîcheur salons concurrencés), puis le plus en retard
+    # Urgence pondérée : high plus souvent, sans affamer medium/low (CDG, Dr Martens…)
+    weight = {"high": 2.5, "medium": 1.15, "low": 0.7}
+
+    def _urgency(item: tuple[float, SearchTarget]) -> float:
+        when, target = item
+        overdue = max(0.0, now - when)
+        return overdue * weight.get(target.priority, 1.0)
+
     due.sort(
         key=lambda item: (
+            -_urgency(item),
             PRIORITY_RANK.get(item[1].priority, 9),
-            item[0],
             item[1].brand,
             item[1].query,
         )

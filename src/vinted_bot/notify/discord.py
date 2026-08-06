@@ -68,12 +68,15 @@ def normalize_brand(brand: str | None) -> str:
         "acne studio": "acne studios",
         "cdg": "comme des garcons",
         "comme des garcons play": "comme des garcons",
+        "comme des garcons black": "comme des garcons",
+        "converse x comme des garcons": "comme des garcons",
         "stussy": "stussy",
         "celine": "celine",
         "toteme": "toteme",
         "dr. martens": "dr martens",
         "doc martens": "dr martens",
         "docs": "dr martens",
+        "drmartens": "dr martens",
         "on running": "on cloud",
         "on-running": "on cloud",
         "hoka one one": "hoka",
@@ -81,6 +84,8 @@ def normalize_brand(brand: str | None) -> str:
         "air jordan": "jordan",
         "jordan brand": "jordan",
     }
+    if text.startswith("comme des garcons"):
+        return "comme des garcons"
     return aliases.get(text, text)
 
 

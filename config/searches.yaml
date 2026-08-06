@@ -180,62 +180,64 @@ searches:
     brand_ids: [1443]
     # vêtements + chaussures F/H
     catalog_ids: [4, 5, 1231, 1242]
-    priority: medium
+    priority: high
     enabled: true
   - brand: fendi
     query: fendi
     brand_ids: [1189]
     # vêtements + chaussures F/H
     catalog_ids: [4, 5, 1231, 1242]
-    priority: medium
+    priority: high
     enabled: true
   - brand: burberry
     query: burberry
     brand_ids: [364]
     # vêtements + chaussures F/H
     catalog_ids: [4, 5, 1231, 1242]
-    priority: medium
+    priority: high
     enabled: true
   - brand: givenchy
     query: givenchy
     brand_ids: [2371]
     # vêtements + chaussures F/H
     catalog_ids: [4, 5, 1231, 1242]
-    priority: medium
+    priority: high
     enabled: true
   - brand: loewe
     query: loewe
     brand_ids: [24209]
     # vêtements + chaussures F/H
     catalog_ids: [4, 5, 1231, 1242]
-    priority: medium
+    priority: high
     enabled: true
   - brand: jacquemus
     query: jacquemus
     brand_ids: [168278]
     # vêtements + chaussures F/H
     catalog_ids: [4, 5, 1231, 1242]
-    priority: medium
+    priority: high
     enabled: true
   - brand: acne studios
     query: acne studios
     brand_ids: [180798]
-    priority: medium
+    priority: high
     enabled: true
   - brand: toteme
     query: toteme
     brand_ids: [546105]
-    priority: medium
+    priority: high
     enabled: true
   - brand: ganni
     query: ganni
     brand_ids: [170650]
-    priority: medium
+    priority: high
     enabled: true
+  # brand_ids Vinted CDG faux (16352233 → 0 items) : query texte + filtre marque
   - brand: comme des garcons
-    query: comme des garcons
-    brand_ids: [16352233]
-    priority: medium
+    query: cdg
+    brand_ids: []
+    catalog_ids: [4, 5]
+    priority: high
     enabled: true
 
   # --- Pépites Sneakers (chaussures F/H uniquement) ---
@@ -261,56 +263,57 @@ searches:
     query: asics
     brand_ids: [1195]
     catalog_ids: [1231, 1242]
-    priority: medium
+    priority: high
     enabled: true
   - brand: salomon
     query: salomon
     brand_ids: [15457]
     catalog_ids: [1231, 1242]
-    priority: medium
+    priority: high
     enabled: true
   - brand: hoka
     query: hoka
     brand_ids: [5827029]
     catalog_ids: [1231, 1242]
-    priority: medium
+    priority: high
     enabled: true
   - brand: on cloud
     query: on cloud
     # On Running + On Cloud
     brand_ids: [267947, 331974]
     catalog_ids: [1231, 1242]
-    priority: medium
+    priority: high
     enabled: true
   - brand: saucony
     query: saucony
     brand_ids: [40813]
     catalog_ids: [1231, 1242]
-    priority: medium
+    priority: high
     enabled: true
+  # brand_ids trop étroit : query texte pour page newest complète
   - brand: dr martens
     query: dr martens
-    brand_ids: [491465]
+    brand_ids: []
     catalog_ids: [1231, 1242]
-    priority: medium
+    priority: high
     enabled: true
   - brand: timberland
     query: timberland
     brand_ids: [44]
     catalog_ids: [1231, 1242]
-    priority: medium
+    priority: high
     enabled: true
   - brand: ugg
     query: ugg
     brand_ids: [2239]
     catalog_ids: [1231, 1242]
-    priority: medium
+    priority: high
     enabled: true
   - brand: birkenstock
     query: birkenstock
     brand_ids: [3203]
     catalog_ids: [1231, 1242]
-    priority: medium
+    priority: high
     enabled: true
 
 defaults:
