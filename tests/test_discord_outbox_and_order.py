@@ -1,4 +1,4 @@
-"""Matrice salons + ordre chrono Discord + scheduler due-based."""
+"""Matrice salons + ordre newest-first Discord + scheduler due-based."""
 
 from __future__ import annotations
 
@@ -21,7 +21,6 @@ def test_salon_matrix_brand_and_all() -> None:
     sneakers = {"jordan": "ch-jordan", "nike": "ch-nike-snk"}
     sneaker_ids = set(sneakers.values())
 
-    # Carhartt sweat → salon marque + ALL
     assert route_channel("Carhartt", clothing, sneaker_map=sneakers, is_shoe=False) == (
         "ch-carhartt"
     )
@@ -36,7 +35,6 @@ def test_salon_matrix_brand_and_all() -> None:
         is True
     )
 
-    # Ami sac → salon marque + ALL (tout post indémodable)
     assert route_channel("Ami", clothing, sneaker_map=sneakers, is_shoe=False) == "ch-ami"
     assert (
         belongs_in_all_vetement(
@@ -49,7 +47,6 @@ def test_salon_matrix_brand_and_all() -> None:
         is True
     )
 
-    # Luxe → pas ALL
     assert (
         belongs_in_all_vetement(
             "Louis Vuitton",
@@ -60,7 +57,6 @@ def test_salon_matrix_brand_and_all() -> None:
         is False
     )
 
-    # Jordan shoe → sneakers, jamais ALL
     assert (
         route_channel("Jordan", clothing, sneaker_map=sneakers, is_shoe=True)
         == "ch-jordan"
@@ -76,8 +72,8 @@ def test_salon_matrix_brand_and_all() -> None:
     )
 
 
-def test_publish_order_uses_published_at_not_score() -> None:
-    """Score n'influence plus l'ordre d'envoi — published_at ASC."""
+def test_publish_order_uses_published_at_newest_first() -> None:
+    """Score n'influence plus l'ordre d'envoi — published_at DESC."""
     now = datetime(2026, 8, 6, 12, 0, tzinfo=timezone.utc)
     high_score_newer = SimpleNamespace(
         published_at=now,
@@ -97,14 +93,13 @@ def test_publish_order_uses_published_at_not_score() -> None:
         vinted_id=150,
         score=50.0,
     )
-    # Sélection simulée triée par score DESC puis réordonnée pour envoi
-    selected = [high_score_newer, mid, low_score_older]
+    selected = [low_score_older, mid, high_score_newer]
     selected.sort(key=listing_discord_sort_key)
-    assert [x.vinted_id for x in selected] == [100, 150, 200]
+    assert [x.vinted_id for x in selected] == [200, 150, 100]
 
 
-def test_outbox_channel_flush_order_by_published_at() -> None:
-    """Plusieurs marques dans le même salon : ordre chronologique published_at."""
+def test_outbox_flush_order_newest_first() -> None:
+    """Plusieurs marques : plus récent d'abord (0 délai)."""
     now = datetime(2026, 8, 6, 12, 0, tzinfo=timezone.utc)
     rows = [
         SimpleNamespace(
@@ -126,12 +121,11 @@ def test_outbox_channel_flush_order_by_published_at() -> None:
             brand="Nike",
         ),
     ]
-    rows.sort(key=lambda r: (r.channel_id, r.published_at, r.id))
-    assert [r.brand for r in rows] == ["Carhartt", "Nike", "Dickies"]
+    rows.sort(key=lambda r: (r.published_at, r.id), reverse=True)
+    assert [r.brand for r in rows] == ["Dickies", "Nike", "Carhartt"]
 
 
 def test_scheduler_picks_due_independently_of_list_order() -> None:
-    """Une marque high due n'attend pas le tour séquentiel des autres."""
     targets = [
         SearchTarget(brand="carhartt", query="carhartt", priority="medium"),
         SearchTarget(brand="nike", query="nike", priority="high"),
@@ -139,9 +133,9 @@ def test_scheduler_picks_due_independently_of_list_order() -> None:
     ]
     now = 1000.0
     next_run = {
-        _target_key(targets[0]): now + 40.0,  # carhartt not due
-        _target_key(targets[1]): now - 1.0,  # nike due
-        _target_key(targets[2]): now + 10.0,  # dickies not due
+        _target_key(targets[0]): now + 40.0,
+        _target_key(targets[1]): now - 1.0,
+        _target_key(targets[2]): now + 10.0,
     }
     picked = _pick_due_target(targets, next_run, now=now)
     assert picked is not None
@@ -152,15 +146,15 @@ def test_target_poll_interval_priority_and_override() -> None:
     high = SearchTarget(brand="nike", query="nike", priority="high")
     medium = SearchTarget(brand="lacoste", query="lacoste", priority="medium")
     hot = SearchTarget(
-        brand="ami", query="ami", priority="medium", poll_seconds=12.0
+        brand="ami", query="ami", priority="medium", poll_seconds=6.0
     )
-    assert target_poll_interval_seconds(high) == 15.0
-    assert target_poll_interval_seconds(medium) == 15.0
-    assert target_poll_interval_seconds(hot) == 12.0
+    assert target_poll_interval_seconds(high) == 8.0
+    assert target_poll_interval_seconds(medium) == 8.0
+    assert target_poll_interval_seconds(hot) == 6.0
 
 
-def test_outbox_drip_cap_selects_oldest_global() -> None:
-    """Cap global : les plus anciens d'abord, multi-marques, pas 40/salon."""
+def test_outbox_drip_cap_selects_newest_global() -> None:
+    """Cap global : les plus récents d'abord, multi-marques."""
     now = datetime(2026, 8, 6, 12, 0, tzinfo=timezone.utc)
     rows = [
         SimpleNamespace(
@@ -188,7 +182,7 @@ def test_outbox_drip_cap_selects_oldest_global() -> None:
             brand="Dickies",
         ),
     ]
-    rows.sort(key=lambda r: (r.published_at, r.id))
+    rows.sort(key=lambda r: (r.published_at, r.id), reverse=True)
     drip = rows[:3]
-    assert [r.brand for r in drip] == ["Carhartt", "Nike", "Adidas"]
+    assert [r.brand for r in drip] == ["Dickies", "Adidas", "Nike"]
     assert len(drip) == 3

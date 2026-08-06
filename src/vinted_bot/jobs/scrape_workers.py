@@ -562,9 +562,9 @@ def run_permanent_scrape_pool(
         brand_workers.append(w)
 
     flush_worker = DiscordFlushWorker(
-        poll_seconds=0.6,
-        buffer_seconds=0.4,
-        max_messages=3,
+        poll_seconds=0.4,
+        buffer_seconds=0.2,
+        max_messages=5,
     )
     flush_worker.start()
 

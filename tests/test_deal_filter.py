@@ -233,8 +233,8 @@ def test_shoes_allowed_for_luxury() -> None:
 
 
 def test_evaluate_reject_too_old() -> None:
-    # max_listing_age_minutes = 45 dans deal_filters.yaml
-    old_ts = (datetime.now(timezone.utc) - timedelta(hours=2)).timestamp()
+    # max_listing_age_minutes = 8 dans deal_filters.yaml
+    old_ts = (datetime.now(timezone.utc) - timedelta(minutes=15)).timestamp()
     deal = evaluate_deal(
         brand="Stone Island",
         title="Sweat Stone Island vintage",
@@ -268,7 +268,7 @@ def test_freshness_boosts_score() -> None:
         brand="Stone Island",
         title="Veste Stone Island",
         price_cents=8000,
-        published_at=datetime.now(timezone.utc) - timedelta(minutes=20),
+        published_at=datetime.now(timezone.utc) - timedelta(minutes=6),
     )
     assert fresh.should_post is True
     assert slightly_older.should_post is True

@@ -37,7 +37,7 @@ log = get_logger(__name__)
 
 
 def listing_discord_sort_key(listing: Any) -> tuple[float, int]:
-    """Ordre d'envoi Discord : published_at ASC (fallback first_seen_at / vinted_id)."""
+    """Ordre d'envoi Discord : published_at DESC (plus récent d'abord)."""
     for attr in (
         getattr(listing, "published_at", None),
         getattr(listing, "first_seen_at", None),
@@ -45,10 +45,11 @@ def listing_discord_sort_key(listing: Any) -> tuple[float, int]:
         if attr is None:
             continue
         try:
-            return (attr.timestamp(), int(getattr(listing, "vinted_id", 0) or 0))
+            # Negate timestamp so sort ASC on key ≈ newest first
+            return (-attr.timestamp(), -int(getattr(listing, "vinted_id", 0) or 0))
         except Exception:  # noqa: BLE001
             continue
-    return (0.0, int(getattr(listing, "vinted_id", 0) or 0))
+    return (0.0, -int(getattr(listing, "vinted_id", 0) or 0))
 
 
 @dataclass(slots=True)
@@ -382,7 +383,7 @@ def scrape_search_once(
         selected = qualified[:post_cap]
         capped = qualified[post_cap:]
 
-        # Plus ancien d'abord → timeline Discord cohérente (score = sélection, pas ordre)
+        # Plus récent d'abord → latence Discord minimale
         selected.sort(key=lambda pair: listing_discord_sort_key(pair[0]))
 
         announce: list[Any] = []
