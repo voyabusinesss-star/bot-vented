@@ -79,6 +79,7 @@ class VintedBrowser:
         self.timeout_ms = timeout_ms
         self.proxy_url = (proxy_url or "").strip() or None
         self.rate_limiter = RateLimiter(delay_seconds)
+        self._last_catalog_http_blocked = False
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
@@ -102,7 +103,12 @@ class VintedBrowser:
         if self._thread is not None and threading.current_thread() is self._thread:
             return getattr(self, name)(*args, **kwargs)
         if self._thread is None or not self._thread.is_alive():
-            raise RuntimeError("VintedBrowser non démarré — appeler start()")
+            # Après force_stop / crash : revive avant retry scrape (sinon spiral
+            # « VintedBrowser non démarré » sur marques publiques + filtres).
+            if name == "_start_impl":
+                raise RuntimeError("VintedBrowser non démarré — appeler start()")
+            log.warning("browser_auto_restart", call=name)
+            self.start()
         reply: queue.Queue[Any] = queue.Queue(maxsize=1)
         self._cmd_q.put((name, args, kwargs, reply))
         try:
@@ -396,9 +402,17 @@ class VintedBrowser:
         api_url = f"{self.base_url}/api/v2/catalog/items?{urlencode(params)}"
         # Prefer APIRequestContext: same cookies as the page, but no renderer.
         # page.evaluate(fetch) is the main "Target crashed" source on Railway RAM.
+        self._last_catalog_http_blocked = False
         result = self._fetch_catalog_via_request(api_url)
         if result is not None:
             return result
+        # 403/429 : ne pas retomber sur evaluate (crash Chromium + spiral force_stop)
+        if getattr(self, "_last_catalog_http_blocked", False):
+            log.warning(
+                "catalog_skip_evaluate_after_block",
+                reason="http_403_or_429",
+            )
+            return None
         return self._fetch_catalog_via_evaluate(api_url)
 
     def _fetch_catalog_via_request(self, api_url: str) -> dict[str, Any] | None:
@@ -423,6 +437,7 @@ class VintedBrowser:
                     pass
                 log.warning("catalog_fetch_failed", status=status, body=body, via="request")
                 if status in {429, 403} or "rate_limit" in body.lower():
+                    self._last_catalog_http_blocked = True
                     penalty = 45.0 if status == 429 else 90.0
                     self.rate_limiter.penalize(penalty)
                     log.warning(
