@@ -218,7 +218,12 @@ class BrandWorker:
         if self._browser is None:
             return
         try:
-            self._browser.stop()
+            # force_stop : évite de bloquer 55s+ si Playwright est coincé
+            force = getattr(self._browser, "force_stop", None)
+            if callable(force):
+                force()
+            else:
+                self._browser.stop()
         except Exception:  # noqa: BLE001
             pass
         self._browser = None

@@ -108,6 +108,9 @@ class VintedBrowser:
         try:
             status, payload = reply.get(timeout=_CALL_TIMEOUT_S)
         except queue.Empty as exc:
+            # Thread Playwright coincé : force_stop pour ne pas bloquer le worker marque.
+            log.warning("playwright_call_timeout_force_stop", name=name)
+            self.force_stop()
             raise TimeoutError(f"Playwright timeout ({name})") from exc
         if status == "err":
             raise payload
@@ -132,9 +135,48 @@ class VintedBrowser:
                 self._call("_stop_impl")
         except Exception:  # noqa: BLE001
             pass
-        self._cmd_q.put(None)
-        self._thread.join(timeout=30)
+        try:
+            self._cmd_q.put(None)
+        except Exception:  # noqa: BLE001
+            pass
+        if self._thread is not None:
+            self._thread.join(timeout=8)
         self._thread = None
+        self._page = None
+        self._context = None
+        self._browser = None
+        self._playwright = None
+
+    def force_stop(self) -> None:
+        """Abandonne un thread Playwright coincé sans attendre la file de commandes."""
+        thread = self._thread
+        browser = self._browser
+        playwright = self._playwright
+        self._thread = None
+        self._page = None
+        self._context = None
+        self._browser = None
+        self._playwright = None
+        try:
+            self._cmd_q.put_nowait(None)
+        except Exception:  # noqa: BLE001
+            pass
+        # Best-effort close hors thread worker (peut échouer si déjà mort).
+        try:
+            if browser is not None:
+                browser.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if playwright is not None:
+                playwright.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=2.0)
+        # Nouvelle file : l'ancienne peut contenir des commandes orphelines.
+        self._cmd_q = queue.Queue()
+        log.warning("browser_force_stopped")
 
     def restart(self, *, proxy_url: str | None = None) -> None:
         """Recycle le navigateur. ``proxy_url`` non-None remplace le proxy sticky."""
