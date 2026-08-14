@@ -174,14 +174,20 @@ def route_channel(
 
 
 def listing_is_shoe(listing: Any, *, deal: Any | None = None) -> bool:
-    """Chaussure ? (catégorie deal + titre)."""
-    from vinted_bot.services.deal_filter import is_shoe_listing
+    """Chaussure ? (catégorie deal + titre + catalogue Vinted)."""
+    from vinted_bot.services.deal_filter import detect_shoe_listing
 
     category = getattr(deal, "category", None) if deal is not None else None
     if category in ("chaussure", "dunk", "air_force_1"):
         return True
     title = getattr(listing, "title", None) if listing is not None else None
-    return bool(is_shoe_listing(title))
+    category_slug = getattr(listing, "category_slug", None) if listing else None
+    raw = getattr(listing, "raw_json", None) if listing is not None else None
+    return detect_shoe_listing(
+        title,
+        category_slug=str(category_slug) if category_slug else None,
+        raw_json=raw if isinstance(raw, dict) else None,
+    )
 
 
 def channel_allows_listing(

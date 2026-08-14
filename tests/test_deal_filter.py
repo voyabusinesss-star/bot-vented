@@ -196,6 +196,38 @@ def test_shoes_rejected_for_classic_brands() -> None:
     assert deal.reason == "shoes_not_allowed"
 
 
+def test_detect_shoe_from_vinted_catalog_id() -> None:
+    from vinted_bot.services.deal_filter import detect_shoe_listing
+
+    assert detect_shoe_listing(
+        "Nike Tech",
+        raw_json={"catalog_id": 1231, "created_at_ts": 1},
+    )
+    assert detect_shoe_listing(
+        "Pull vintage",
+        raw_json={"catalog": {"id": 1242, "title": "Chaussures hommes"}},
+    )
+    assert not detect_shoe_listing(
+        "Sweat Nike",
+        raw_json={"catalog_id": 5, "created_at_ts": 1},
+    )
+
+
+def test_nike_samba_rejected_for_classic_brand() -> None:
+    deal = evaluate_deal(
+        brand="Carhartt",
+        title="Article mode",
+        price_cents=3500,
+        size="42",
+        raw_json={
+            "catalog_id": 1231,
+            "created_at_ts": datetime.now(timezone.utc).timestamp(),
+        },
+    )
+    assert deal.should_post is False
+    assert deal.reason == "shoes_not_allowed"
+
+
 def test_shoes_only_rejects_clothing() -> None:
     deal = evaluate_deal(
         brand="Jordan",

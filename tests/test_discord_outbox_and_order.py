@@ -72,6 +72,19 @@ def test_salon_matrix_brand_and_all() -> None:
     )
 
 
+def test_listing_is_shoe_from_catalog_raw_json() -> None:
+    from types import SimpleNamespace
+
+    from vinted_bot.notify.discord import listing_is_shoe
+
+    listing = SimpleNamespace(
+        title="Article mode",
+        category_slug=None,
+        raw_json={"catalog_id": 1231},
+    )
+    assert listing_is_shoe(listing) is True
+
+
 def test_publish_order_uses_published_at_newest_first() -> None:
     """Score n'influence plus l'ordre d'envoi — published_at DESC."""
     now = datetime(2026, 8, 6, 12, 0, tzinfo=timezone.utc)

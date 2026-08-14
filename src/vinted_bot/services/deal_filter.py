@@ -513,6 +513,74 @@ def is_shoe_listing(
     return False
 
 
+SHOE_VINTED_CATALOG_IDS = frozenset({1231, 1242})
+_SHOE_RAW_CATALOG_HINTS = (
+    "chaussure",
+    "chaussures",
+    "sneaker",
+    "sneakers",
+    "basket",
+    "baskets",
+    "shoe",
+    "shoes",
+    "footwear",
+)
+
+
+def _catalog_id_from_raw(raw: dict[str, Any] | None) -> int | None:
+    if not isinstance(raw, dict):
+        return None
+    direct = raw.get("catalog_id")
+    if isinstance(direct, int):
+        return direct
+    if isinstance(direct, str) and direct.isdigit():
+        return int(direct)
+    catalog = raw.get("catalog")
+    if isinstance(catalog, dict):
+        cid = catalog.get("id")
+        if isinstance(cid, int):
+            return cid
+        if isinstance(cid, str) and cid.isdigit():
+            return int(cid)
+    return None
+
+
+def _raw_catalog_text(raw: dict[str, Any] | None) -> str:
+    if not isinstance(raw, dict):
+        return ""
+    parts: list[str] = []
+    for key in ("catalog_title", "category_title", "catalog"):
+        value = raw.get(key)
+        if isinstance(value, str):
+            parts.append(value)
+        elif isinstance(value, dict):
+            for sub in ("title", "name", "code"):
+                sub_val = value.get(sub)
+                if isinstance(sub_val, str):
+                    parts.append(sub_val)
+    return _normalize_text(" ".join(parts))
+
+
+def detect_shoe_listing(
+    title: str | None,
+    *,
+    category_slug: str | None = None,
+    raw_json: dict[str, Any] | None = None,
+    config: DealFiltersConfig | None = None,
+) -> bool:
+    """Chaussure : titre, catégorie DB, ou catalogue Vinted (raw_json)."""
+    if category_slug in {"chaussure", "dunk", "air_force_1"}:
+        return True
+    if isinstance(raw_json, dict):
+        catalog_id = _catalog_id_from_raw(raw_json)
+        if catalog_id in SHOE_VINTED_CATALOG_IDS:
+            return True
+        blob = _raw_catalog_text(raw_json)
+        if blob and any(_contains_keyword(blob, hint) for hint in _SHOE_RAW_CATALOG_HINTS):
+            return True
+    return is_shoe_listing(title, config=config)
+
+
 def is_clothing_not_shoe(
     title: str | None,
     *,
@@ -840,7 +908,11 @@ def evaluate_deal(
     # Chaussures : rejetées sauf marques luxe (allow_shoes: true)
     if (
         cfg.settings.reject_shoes_unless_allowed
-        and is_shoe_listing(title, config=cfg)
+        and detect_shoe_listing(
+            title,
+            raw_json=raw_json if isinstance(raw_json, dict) else None,
+            config=cfg,
+        )
         and not brand_allows_shoes(brand, config=cfg)
     ):
         buy = (price_cents or 0) / 100.0
