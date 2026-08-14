@@ -317,6 +317,17 @@ class DiscordInteractionClient:
                 f"Delete message {response.status_code}: {response.text[:400]}"
             )
 
+    def pin_channel_message(self, channel_id: str, message_id: str) -> None:
+        if not channel_id or not message_id:
+            return
+        response = self._client.put(
+            f"/channels/{channel_id}/pins/{message_id}",
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Pin message {response.status_code}: {response.text[:400]}"
+            )
+
     def edit_channel_message(
         self,
         channel_id: str,
