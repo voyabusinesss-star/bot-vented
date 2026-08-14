@@ -15,6 +15,7 @@ config/guides
 config/*.mp4
 config/*.MOV
 config/*.xlsx
+!config/Resello_1000_Niches_Vinted.xlsx
 *.png
 *.jpg
 *.jpeg
