@@ -359,13 +359,13 @@ class Settings(BaseSettings):
     # IDs Discord autorisés à /set-plan (séparés par des virgules). Vide = owner guild seulement via checks basiques.
     discord_filter_admin_ids: str = ""
     # Alertes DM filtres privés : délai court entre envois (worker async, anti 429)
-    private_filter_dm_delay_seconds: float = Field(default=0.4, ge=0.0)
+    private_filter_dm_delay_seconds: float = Field(default=0.25, ge=0.0)
     # Ne DM que les annonces publiées récemment (défaut 15 min)
     private_filter_max_age_seconds: float = Field(default=900.0, ge=30.0)
     # Max matches mis en file par passage scrape (le worker envoie ensuite)
     private_filter_max_dm_per_scrape: int = Field(default=50, ge=1, le=200)
     # Intervalle scrape filtres privés (secondes) — boucle continue
-    private_filter_scrape_interval_seconds: float = Field(default=4.0, ge=3.0)
+    private_filter_scrape_interval_seconds: float = Field(default=3.0, ge=2.0)
     # Portail liaison Vinted (URL publique HTTPS, ex. ngrok)
     vinted_link_public_url: str = ""
     vinted_link_server_host: str = "0.0.0.0"

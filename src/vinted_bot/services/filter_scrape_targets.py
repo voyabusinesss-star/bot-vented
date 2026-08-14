@@ -120,7 +120,7 @@ def filter_row_to_search_target(
         brand_ids=brand_ids,
         catalog_ids=catalog_ids,
         order="newest_first",
-        max_items=8,
+        max_items=6,
         max_discord_posts=0,
         price_from=float(min_price) if min_price is not None else None,
         price_to=float(max_price) if max_price is not None else None,

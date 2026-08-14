@@ -184,6 +184,21 @@ def _poll_sleep(min_s: float, max_s: float) -> None:
     time.sleep(random.uniform(lo, hi))
 
 
+def _filter_inject_batch_size(pending: int) -> int:
+    """Plus de filtres actifs → plus gros batch (même Chromium, moins de latence)."""
+    if pending <= 0:
+        return 0
+    if pending >= 20:
+        return min(6, pending)
+    if pending >= 10:
+        return min(5, pending)
+    if pending >= 4:
+        return min(3, pending)
+    if pending >= 2:
+        return 2
+    return 1
+
+
 def _scrape_target(
     target: SearchTarget,
     *,
@@ -203,6 +218,8 @@ def _scrape_target(
         discord_cap = searches_cfg.max_discord_posts
 
     is_user_filter = getattr(target, "source", "yaml") == "user_filter"
+    if is_user_filter and target.max_items:
+        per_search = int(target.max_items)
     if is_user_filter:
         discord_cap = 0
 
@@ -383,23 +400,16 @@ class BrandWorker:
         if now < self._next_filter_inject_at:
             return
         interval = float(
-            getattr(settings, "private_filter_scrape_interval_seconds", 4.0) or 4.0
+            getattr(settings, "private_filter_scrape_interval_seconds", 3.0) or 3.0
         )
-        interval = max(3.0, interval)
+        interval = max(2.0, interval)
         from vinted_bot.services.filter_scrape_targets import (
             get_filter_target_rotator,
         )
 
         rotator = get_filter_target_rotator()
         pending = rotator.size()
-        if pending >= 12:
-            take = min(4, pending)
-        elif pending >= 6:
-            take = min(3, pending)
-        elif pending >= 2:
-            take = 2
-        else:
-            take = 1
+        take = _filter_inject_batch_size(pending)
         batch = rotator.next_batch(take)
         if not batch:
             self._next_filter_inject_at = now + interval
@@ -494,12 +504,28 @@ class BrandWorker:
             try:
                 browser = self._ensure_browser()
                 now = time.monotonic()
+                try:
+                    self._inject_filter_targets(browser=browser)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "brand_worker_filter_inject_preflight_failed",
+                        worker_id=self.worker_id,
+                        error=str(exc)[:160],
+                    )
                 target = _pick_due_target(self.targets, self._next_run, now=now)
                 if target is None:
+                    try:
+                        self._inject_filter_targets(browser=browser)
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning(
+                            "brand_worker_filter_inject_idle_failed",
+                            worker_id=self.worker_id,
+                            error=str(exc)[:160],
+                        )
                     wait_s = _seconds_until_next(
                         self.targets, self._next_run, now=now
                     )
-                    self._stop.wait(min(wait_s, 2.0))
+                    self._stop.wait(min(wait_s, 1.0))
                     continue
 
                 key = _target_key(target)
