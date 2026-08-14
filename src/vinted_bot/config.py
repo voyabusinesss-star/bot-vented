@@ -364,8 +364,8 @@ class Settings(BaseSettings):
     private_filter_max_age_seconds: float = Field(default=900.0, ge=30.0)
     # Max matches mis en file par passage scrape (le worker envoie ensuite)
     private_filter_max_dm_per_scrape: int = Field(default=50, ge=1, le=200)
-    # Intervalle dédié scrape filtres privés (secondes) — boucle continue
-    private_filter_scrape_interval_seconds: float = Field(default=8.0, ge=3.0)
+    # Intervalle scrape filtres privés (secondes) — boucle continue
+    private_filter_scrape_interval_seconds: float = Field(default=4.0, ge=3.0)
     # Portail liaison Vinted (URL publique HTTPS, ex. ngrok)
     vinted_link_public_url: str = ""
     vinted_link_server_host: str = "0.0.0.0"

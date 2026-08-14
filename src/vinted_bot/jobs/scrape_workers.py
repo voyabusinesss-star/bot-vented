@@ -383,7 +383,7 @@ class BrandWorker:
         if now < self._next_filter_inject_at:
             return
         interval = float(
-            getattr(settings, "private_filter_scrape_interval_seconds", 8.0) or 8.0
+            getattr(settings, "private_filter_scrape_interval_seconds", 4.0) or 4.0
         )
         interval = max(3.0, interval)
         from vinted_bot.services.filter_scrape_targets import (
@@ -392,7 +392,14 @@ class BrandWorker:
 
         rotator = get_filter_target_rotator()
         pending = rotator.size()
-        take = 2 if pending >= 2 else 1
+        if pending >= 12:
+            take = min(4, pending)
+        elif pending >= 6:
+            take = min(3, pending)
+        elif pending >= 2:
+            take = 2
+        else:
+            take = 1
         batch = rotator.next_batch(take)
         if not batch:
             self._next_filter_inject_at = now + interval
