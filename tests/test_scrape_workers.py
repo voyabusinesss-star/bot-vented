@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from threading import Thread
+
 from vinted_bot.config_loader import SearchTarget
-from vinted_bot.jobs.scrape_workers import partition_targets
+from vinted_bot.jobs.scrape_workers import (
+    _filter_inject_batch_size,
+    partition_targets,
+)
 from vinted_bot.utils.proxy import (
     assign_proxy_for_worker,
     parse_proxy_url_list,
@@ -75,3 +81,29 @@ def test_assign_and_rotate_proxy() -> None:
     assert rotate_proxy(proxies, "http://a:1") == "http://b:2"
     assert rotate_proxy(proxies, "http://c:3") == "http://a:1"
     assert rotate_proxy([], None) is None
+
+
+def test_filter_inject_batch_size_caps_load() -> None:
+    assert _filter_inject_batch_size(0) == 0
+    assert _filter_inject_batch_size(1) == 1
+    assert _filter_inject_batch_size(8) == 2
+    assert _filter_inject_batch_size(20) == 3
+
+
+def test_brand_worker_recreates_dead_browser() -> None:
+    from vinted_bot.jobs.scrape_workers import BrandWorker
+
+    worker = BrandWorker(
+        worker_id=0,
+        targets=[],
+        proxy_url=None,
+        all_proxies=[],
+        headless=True,
+    )
+    dead = SimpleNamespace(_thread=SimpleNamespace(is_alive=lambda: False))
+    worker._browser = dead  # type: ignore[assignment]
+    assert worker._browser_is_usable() is False
+    alive = SimpleNamespace(_thread=Thread(target=lambda: None, daemon=True))
+    alive._thread.start()
+    alive._thread.join(timeout=1.0)
+    assert worker._browser_is_usable(alive) is False
