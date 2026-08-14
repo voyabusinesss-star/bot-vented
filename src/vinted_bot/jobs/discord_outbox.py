@@ -99,6 +99,7 @@ def _as_aware(dt: datetime | None) -> datetime | None:
 def resolve_discord_channels(listing: Listing) -> tuple[str | None, str | None, bool]:
     """Retourne (brand_channel_id, all_channel_id_or_none, is_shoe)."""
     from vinted_bot.notify.discord import (
+        all_vetement_mirror_exclude_channels,
         belongs_in_all_vetement,
         channel_allows_listing,
         get_deal_evaluation,
@@ -139,6 +140,7 @@ def resolve_discord_channels(listing: Listing) -> tuple[str | None, str | None, 
             is_shoe=is_shoe,
             brand_channel_id=brand_channel_id,
             sneaker_channel_ids=sneaker_ids,
+            exclude_brand_channel_ids=all_vetement_mirror_exclude_channels(settings),
         )
     )
     return brand_channel_id, (all_channel if mirror_all else None), is_shoe

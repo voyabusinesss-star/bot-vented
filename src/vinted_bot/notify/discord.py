@@ -130,6 +130,30 @@ _ALL_VETEMENT_EXCLUDE_KEYWORDS: tuple[str, ...] = (
     "bague",
 )
 
+# Indémodables actifs en salon marque, mais pas en #all-vetement
+_ALL_VETEMENT_EXCLUDE_BRANDS: frozenset[str] = frozenset({"adidas"})
+
+
+def all_vetement_mirror_exclude_channels(settings: Settings | None = None) -> frozenset[str]:
+    """Salons marque dont les posts ne doivent jamais être dupliqués dans #all-vetement."""
+    s = settings or get_settings()
+    channels: set[str] = set()
+    for attr in ("discord_channel_adidas",):
+        channel_id = sanitize_discord_channel_id(getattr(s, attr, "") or "")
+        if channel_id:
+            channels.add(channel_id)
+    return frozenset(channels)
+
+
+def _all_vetement_brand_excluded(brand: str | None) -> bool:
+    key = normalize_brand(brand)
+    if not key:
+        return False
+    for excluded in _ALL_VETEMENT_EXCLUDE_BRANDS:
+        if key == excluded or key.startswith(f"{excluded} "):
+            return True
+    return False
+
 
 def is_classique_brand(brand: str | None) -> bool:
     """Marque des salons indémodables / les-classiques (hors luxe, hors sneakers pures)."""
@@ -246,6 +270,7 @@ def belongs_in_all_vetement(
     is_shoe: bool,
     brand_channel_id: str | None = None,
     sneaker_channel_ids: set[str] | None = None,
+    exclude_brand_channel_ids: frozenset[str] | None = None,
     is_vetement: bool = True,
 ) -> bool:
     """#all-vetement = tout ce qui va en salon indémodable.
@@ -257,6 +282,14 @@ def belongs_in_all_vetement(
     if is_shoe:
         return False
     if brand_channel_id and sneaker_channel_ids and brand_channel_id in sneaker_channel_ids:
+        return False
+    if (
+        brand_channel_id
+        and exclude_brand_channel_ids
+        and brand_channel_id in exclude_brand_channel_ids
+    ):
+        return False
+    if _all_vetement_brand_excluded(brand):
         return False
     return is_classique_brand(brand) and normalize_brand(brand) not in LUXE_BRANDS
 
@@ -932,6 +965,9 @@ class DiscordNotifier:
                 is_shoe=is_shoe,
                 brand_channel_id=brand_channel_id,
                 sneaker_channel_ids=sneaker_ids,
+                exclude_brand_channel_ids=all_vetement_mirror_exclude_channels(
+                    self.settings
+                ),
             )
         )
         if mirror_all:

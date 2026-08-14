@@ -115,7 +115,17 @@ def test_nike_clothing_vs_sneakers_routing() -> None:
     assert belongs_in_all_vetement("Moncler", is_shoe=False) is False
     assert belongs_in_all_vetement("New Balance", is_shoe=False) is False
     assert belongs_in_all_vetement("Carhartt", is_shoe=False) is True
-    assert belongs_in_all_vetement("adidas originals", is_shoe=False) is True
+    assert belongs_in_all_vetement("adidas originals", is_shoe=False) is False
+    assert belongs_in_all_vetement("Adidas", is_shoe=False) is False
+    assert (
+        belongs_in_all_vetement(
+            "Carhartt",
+            is_shoe=False,
+            brand_channel_id="1529532308653346847",
+            exclude_brand_channel_ids=frozenset({"1529532308653346847"}),
+        )
+        is False
+    )
     # Posté dans un salon Pépites Sneakers → jamais #all-vetement
     assert (
         belongs_in_all_vetement(
