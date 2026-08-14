@@ -246,7 +246,19 @@ def ensure_catalog_download_url(
             if response.status_code == 200:
                 attachments = response.json().get("attachments") or []
                 if attachments and attachments[0].get("url"):
-                    return str(attachments[0]["url"])
+                    att = attachments[0]
+                    att_size = int(att.get("size") or 0)
+                    if (
+                        att_size >= len(catalog_bytes)
+                        and str(att.get("filename") or "") == catalog_filename
+                    ):
+                        return str(att["url"])
+                    log.warning(
+                        "catalog_host_stale_attachment",
+                        expected_bytes=len(catalog_bytes),
+                        attachment_bytes=att_size,
+                        filename=att.get("filename"),
+                    )
         except Exception as exc:  # noqa: BLE001
             log.debug("catalog_host_fetch_failed", error=str(exc)[:120])
         try:
