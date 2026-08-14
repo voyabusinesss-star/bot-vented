@@ -139,8 +139,6 @@ def extract_depth_profile(titles: Sequence[str]) -> DepthProfile:
         1 if has_edition else 0
     )
     parts: list[str] = []
-    if colors:
-        parts.append("couleurs " + "/".join(colors[:3]))
     if sizes:
         parts.append("tailles " + ",".join(sizes[:5]))
     if years:

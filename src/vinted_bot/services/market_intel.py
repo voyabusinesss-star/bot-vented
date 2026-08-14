@@ -506,6 +506,8 @@ def discovery_candidate_snapshots(
         )
         rows = [_detach_snapshot(r) for r in session.scalars(stmt).all()]
 
+    rows = [r for r in rows if is_granular_niche(r)]
+
     def _discovery_rank(s: NicheSnapshot) -> float:
         n = int(s.listing_count or 0)
         margin = float(s.margin_proxy_pct or 0.0)

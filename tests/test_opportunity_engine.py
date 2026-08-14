@@ -118,7 +118,8 @@ def test_rejects_single_listing_and_single_seller() -> None:
     )
 
 
-def test_accepts_product_license_and_object_niches() -> None:
+def test_accepts_product_license_and_object_niches_with_model() -> None:
+    """Collectibles OK uniquement avec modèle catalogue explicite."""
     assert is_granular_niche(
         SimpleNamespace(
             brand_slug="inconnu",
@@ -137,7 +138,7 @@ def test_accepts_product_license_and_object_niches() -> None:
             listing_count=5,
         )
     )
-    assert is_granular_niche(
+    assert not is_granular_niche(
         SimpleNamespace(
             brand_slug="inconnu",
             model_slug=None,
@@ -146,7 +147,7 @@ def test_accepts_product_license_and_object_niches() -> None:
             listing_count=8,
         )
     )
-    assert is_granular_niche(
+    assert not is_granular_niche(
         SimpleNamespace(
             brand_slug="inconnu",
             model_slug=None,
@@ -155,6 +156,50 @@ def test_accepts_product_license_and_object_niches() -> None:
             listing_count=7,
         )
     )
+
+
+def test_rejects_generic_livre_and_star_wars() -> None:
+    assert not is_granular_niche(
+        SimpleNamespace(
+            brand_slug="inconnu",
+            model_slug=None,
+            keyword_flags="",
+            category_slug="livre",
+            listing_count=10,
+        )
+    )
+    assert not is_granular_niche(
+        SimpleNamespace(
+            brand_slug="inconnu",
+            model_slug=None,
+            keyword_flags="star_wars+jouet",
+            category_slug="jouet",
+            listing_count=10,
+        )
+    )
+    assert is_granular_niche(
+        SimpleNamespace(
+            brand_slug="inconnu",
+            model_slug="lego_star_wars",
+            keyword_flags="star_wars",
+            category_slug="jouet",
+            listing_count=8,
+        )
+    )
+
+
+def test_label_fashion_brand_category() -> None:
+    name = _label(
+        SimpleNamespace(
+            brand_slug="carhartt",
+            model_slug=None,
+            keyword_flags="",
+            category_slug="veste",
+        ),
+        titles=[],
+    )
+    assert "Carhartt" in name
+    assert "Veste" in name
 
 
 def test_label_prefers_product_over_unknown_brand() -> None:
@@ -198,12 +243,12 @@ def test_classify_hidden_value_for_obscure_brand() -> None:
     assert "cachée" in label.lower() or "peu connue" in label.lower()
 
 
-def test_enrich_name_adds_color_and_era() -> None:
+def test_enrich_name_adds_era_not_color() -> None:
     name = _enrich_name_from_titles(
         "Carhartt Detroit Jacket",
         ["Carhartt Detroit Jacket marron vintage années 2000 taille M"],
     )
-    assert "marron" in name.lower()
+    assert "marron" not in name.lower()
     assert "2000" in name or "Y2K" in name or "y2k" in name.lower()
 
 
@@ -388,7 +433,7 @@ def test_snapshot_to_opportunity_distinct_profiles(monkeypatch) -> None:
 def _sample_op(**kw: object) -> Opportunity:
     base = dict(
         niche_key="carhartt|detroit_jacket|veste|vintage",
-        name="Carhartt Detroit Jacket marron",
+        name="Carhartt Detroit Jacket",
         score=94.0,
         niche_type="hidden",
         niche_type_label="💎 Niche peu connue / sous-exploitée",
@@ -427,7 +472,7 @@ def _sample_op(**kw: object) -> Opportunity:
         lifecycle="growth",
         lifecycle_label="📈 Croissance",
         lifecycle_avoid=False,
-        depth_summary="couleurs marron · tailles M,L",
+        depth_summary="tailles M,L · années 2000",
         weak_signal=True,
         weak_signal_summary="progression + faible concurrence",
         confidence_label="bonne",
@@ -444,6 +489,8 @@ def _sample_op(**kw: object) -> Opportunity:
         action="buy",
         action_detail="Rechercher activement",
         photo_url=None,
+        photo_listing_url=None,
+        photo_listing_title=None,
         brand_slug="carhartt",
         model_slug="detroit_jacket",
         category_slug="veste",
@@ -490,11 +537,14 @@ def test_publish_requires_ensemble_not_micro_cluster() -> None:
 
 def test_market_study_embed_radar_essentials_only() -> None:
     op = _sample_op(
-        photo_url="https://images1.vinted.net/t/01_x/f200/photo.jpeg?s=1"
+        photo_url="https://images1.vinted.net/t/01_x/f200/photo.jpeg?s=1",
+        photo_listing_url="https://www.vinted.fr/items/12345",
+        photo_listing_title="Carhartt Detroit Jacket vintage M",
     )
     embed = build_opportunity_embed(op)
-    assert "Carhartt Detroit Jacket marron" in embed["title"]
-    assert "Carhartt Detroit Jacket marron" in embed["description"]
+    assert "Carhartt Detroit Jacket" in embed["title"]
+    assert "Carhartt Detroit Jacket" in embed["description"]
+    assert "Annonce analysée" in embed["description"]
     assert "⭐ Opportunité" in embed["description"]
     assert "94/100" in embed["description"]
     assert "Voir les annonces similaires" in embed["description"]
@@ -510,11 +560,15 @@ def test_market_study_embed_radar_essentials_only() -> None:
     blob = json.dumps(embed, ensure_ascii=False)
     for banned in ("P25", "P75", "TTL", "multi-angle", "sous-score", "Rareté", "Concurrence"):
         assert banned not in blob
+    from vinted_bot.services.opportunity_engine import _vinted_explore_url
+
     assert "Achat observé" in embed["fields"][0]["value"]
     assert "Demande" in embed["fields"][1]["value"]
-    assert "catalog?search_text=" in embed["url"]
-    assert "Carhartt" in embed["url"] or "carhartt" in embed["url"].lower()
-    assert "annonces analysées" in embed["footer"]["text"]
+    assert embed["url"] == "https://www.vinted.fr/items/12345"
+    assert "catalog?search_text=" in _vinted_explore_url(op)
+    assert "carhartt" in _vinted_explore_url(op).lower()
+    assert "Analyse :" in embed["footer"]["text"]
+    assert "annonce référence" in embed["footer"]["text"]
     # Image de référence en grand (pas thumbnail)
     assert "image" in embed
     assert "f800" in embed["image"]["url"]
@@ -529,6 +583,32 @@ def test_explore_url_is_valid_catalog_search() -> None:
     assert "/catalog?" in url
     assert "search_text=" in url
     assert "order=newest_first" in url
+    assert "veste" not in url.lower().split("search_text=")[-1].split("&")[0]
+
+
+def test_explore_search_query_requires_precision() -> None:
+    from vinted_bot.services.opportunity_engine import _explore_search_query
+
+    vague = _sample_op(
+        brand_slug="",
+        model_slug="",
+        category_slug="veste",
+        keyword_flags="",
+        search_terms=("Veste",),
+        name="Veste",
+    )
+    assert _explore_search_query(vague) == ""
+    precise = _sample_op(
+        brand_slug="lacoste",
+        model_slug="",
+        category_slug="veste",
+        keyword_flags="",
+        search_terms=("Lacoste", "Veste"),
+        name="Lacoste Veste",
+    )
+    q = _explore_search_query(precise).lower()
+    assert "lacoste" in q
+    assert "veste" not in q.split() or "lacoste" in q
 
 
 def test_top_board_explains_why() -> None:

@@ -84,6 +84,10 @@ def normalize_brand(brand: str | None) -> str:
         "newbalance": "new balance",
         "air jordan": "jordan",
         "jordan brand": "jordan",
+        "c p company": "cp company",
+        "cp company": "cp company",
+        "c.p. company": "cp company",
+        "cpcompany": "cp company",
     }
     if text.startswith("comme des garcons"):
         return "comme des garcons"

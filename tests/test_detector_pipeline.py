@@ -68,6 +68,8 @@ def _op(score: float, *, priority: str = "interesting", key: str = "k") -> Oppor
         action="watch",
         action_detail="d",
         photo_url=None,
+        photo_listing_url=None,
+        photo_listing_title=None,
         brand_slug="test",
         model_slug="model",
         category_slug="veste",

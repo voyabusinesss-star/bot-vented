@@ -102,6 +102,10 @@ models:
     display_name: Detroit Jacket
     brand: carhartt
     aliases: ["detroit jacket", "detroit", "veste detroit"]
+  - slug: goggle_jacket
+    display_name: Goggle Jacket
+    brand: cp company
+    aliases: ["goggle jacket", "goggle", "cp company goggle", "c.p. company goggle"]
   - slug: active_jacket
     display_name: Active Jacket
     brand: carhartt

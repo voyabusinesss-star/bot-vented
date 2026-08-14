@@ -103,6 +103,16 @@ def test_product_level_entity_without_fashion_brand() -> None:
     assert extracted.category_slug == "peluche"
 
 
+def test_detect_cp_company_goggle_from_title() -> None:
+    extracted = extract_entities_from_text(
+        title="C.P. Company goggle jacket vintage M",
+        brand=None,
+    )
+    assert extracted.brand_slug == "cp company"
+    assert extracted.model_slug == "goggle_jacket"
+    assert "goggle_jacket" in extracted.niche_key
+
+
 def test_saturation_penalty() -> None:
     assert brand_saturation_penalty("nike", None) > brand_saturation_penalty(
         "carhartt", "detroit_jacket"

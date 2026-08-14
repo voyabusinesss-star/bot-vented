@@ -36,12 +36,16 @@ from vinted_bot.services.opportunity_engine import (
     Opportunity,
     PUBLISH_MIN_SCORE,
     _explore_search_query,
+    _is_vague_search_token,
     _listing_matches_niche,
+    _listing_url,
     _photo_candidates_from_listing,
     _radar_badges,
     _radar_demand_pct,
     _radar_sale_pct,
+    _type_flags_from_keyword_flags,
     _vinted_explore_url,
+    explore_search_variants,
     snapshot_to_opportunity,
 )
 from vinted_bot.utils.logging import get_logger
@@ -561,18 +565,9 @@ def develop_niche(
         )
     )
     duration = max(30.0, duration)
-    query = _explore_search_query(op)
-    variants = [query]
-    if op.brand_slug:
-        variants.append(op.brand_slug.replace("_", " "))
-    if op.model_slug:
-        variants.append(
-            f"{(op.brand_slug or '').replace('_', ' ')} {op.model_slug.replace('_', ' ')}".strip()
-        )
-    for t in op.search_terms[:3]:
-        if t and t not in variants:
-            variants.append(t)
-    variants = list(dict.fromkeys(v.strip() for v in variants if v.strip()))[:5]
+    variants = explore_search_variants(op)
+    if not variants:
+        variants = [_explore_search_query(op) or op.name]
 
     log.info(
         "fiche_develop_start",
@@ -719,15 +714,14 @@ def _collect_mosaic(snap: NicheSnapshot) -> list[MosaicItem]:
 
         rows = list(session.scalars(stmt).unique().all())
         matched = [L for L in rows if _listing_matches_niche(L, snap)]
-        if len(matched) < MIN_MOSAIC_PHOTOS:
-            # élargir : marque seule
-            brand = (snap.brand_slug or "").strip().lower()
-            if brand and brand not in {"", "inconnu", "unknown"}:
-                for L in rows:
-                    if L in matched:
-                        continue
-                    if (normalize_brand(L.brand) or "inconnu") == brand:
-                        matched.append(L)
+        if len(matched) < MIN_MOSAIC_PHOTOS and snap.model_slug:
+            # Pas d'élargissement marque-seule : photos doivent coller au modèle analysé
+            log.info(
+                "fiche_mosaic_strict",
+                niche_key=snap.niche_key,
+                matched=len(matched),
+                need=MIN_MOSAIC_PHOTOS,
+            )
 
         # Diversité vendeurs + prix
         by_seller: dict[str, list[Listing]] = {}
@@ -794,7 +788,7 @@ def _collect_mosaic(snap: NicheSnapshot) -> list[MosaicItem]:
             mosaic.append(
                 MosaicItem(
                     photo_url=photo,
-                    listing_url=(L.url or _vinted_explore_url_from_snap(snap)),
+                    listing_url=_listing_url(L),
                     seller_key=seller,
                     price_eur=price,
                     title=(L.title or "")[:80],
@@ -807,20 +801,28 @@ def _vinted_explore_url_from_snap(snap: NicheSnapshot) -> str:
     from urllib.parse import urlencode
 
     base = (get_settings().vinted_base_url or "https://www.vinted.fr").rstrip("/")
-    parts = []
-    if snap.brand_slug:
+    parts: list[str] = []
+    if snap.brand_slug and snap.brand_slug.lower() not in {"inconnu", "unknown"}:
         parts.append(snap.brand_slug.replace("_", " "))
     if snap.model_slug:
         parts.append(snap.model_slug.replace("_", " "))
-    q = " ".join(parts).strip() or "vinted"
+    for flag in _type_flags_from_keyword_flags(snap.keyword_flags or ""):
+        parts.append(flag)
+    q = " ".join(dict.fromkeys(parts)).strip()
+    if not q or _is_vague_search_token(q):
+        q = " ".join(parts[:2]).strip() or "vinted"
     return f"{base}/catalog?{urlencode([('search_text', q), ('order', 'newest_first')])}"
 
 
 def _look_for_lines(op: Opportunity, titles: Sequence[str]) -> tuple[str, ...]:
     lines: list[str] = []
     depth = extract_depth_profile(list(titles))
-    if depth.colors:
-        lines.append("Couleurs recherchées : " + ", ".join(depth.colors[:4]))
+    if op.brand_slug and op.brand_slug.lower() not in {"inconnu", "unknown"}:
+        lines.append(f"Marque : {op.brand_slug.replace('_', ' ').title()}")
+    if op.model_slug:
+        lines.append(f"Modèle / type : {op.model_slug.replace('_', ' ')}")
+    for flag in _type_flags_from_keyword_flags(op.keyword_flags):
+        lines.append(f"Segment : {flag.title()}")
     if depth.years:
         lines.append("Années / éditions : " + ", ".join(str(y) for y in depth.years[:4]))
     if depth.has_collab:
@@ -829,11 +831,14 @@ def _look_for_lines(op: Opportunity, titles: Sequence[str]) -> tuple[str, ...]:
         lines.append("Éditions spéciales / OG / limited")
     for v in (op.depth_summary or "").split("·"):
         v = v.strip()
-        if v and len(v) > 3 and not v.startswith("peu de"):
-            lines.append(v)
+        if not v or len(v) <= 3 or v.startswith("peu de"):
+            continue
+        if v.lower().startswith("couleur"):
+            continue
+        lines.append(v)
     for t in op.search_terms[:6]:
         tl = (t or "").strip()
-        if tl and tl.lower() not in {x.lower() for x in lines}:
+        if tl and not _is_vague_search_token(tl) and tl.lower() not in {x.lower() for x in lines}:
             lines.append(f"Mot-clé : {tl}")
     if op.model_slug:
         lines.append(f"Modèle : {op.model_slug.replace('_', ' ')}")
@@ -1018,6 +1023,9 @@ def build_fiche_discord_payload(sheet: NicheProductSheet) -> dict[str, Any]:
         color = COLOR_PURPLE
 
     explore = _vinted_explore_url(op)
+    ref = sheet.mosaic[0] if sheet.mosaic else None
+    ref_url = (op.photo_listing_url or (ref.listing_url if ref else "") or explore).strip()
+    ref_title = (op.photo_listing_title or (ref.title if ref else "") or "").strip()
     badges = list(_radar_badges(op))
     if "💎 Opportunité validée" not in badges:
         badges = ["💎 Opportunité validée", *badges][:4]
@@ -1047,6 +1055,11 @@ def build_fiche_discord_payload(sheet: NicheProductSheet) -> dict[str, Any]:
         f"{score_stars(op.score)}\n\n"
         f"{badge_line}"
     )
+    if ref_url and ref_url != explore:
+        description += (
+            f"\n\n📷 **[Produit de référence]({ref_url})**"
+            + (f" — _{ref_title[:90]}_" if ref_title else "")
+        )
 
     fields = [
         {
@@ -1094,15 +1107,16 @@ def build_fiche_discord_payload(sheet: NicheProductSheet) -> dict[str, Any]:
 
     # Premier embed = fiche + 1re image ; suivants = collage (même url)
     photos = [m.photo_url for m in sheet.mosaic]
+    mosaic_links = sheet.mosaic
     main: dict[str, Any] = {
         "title": f"📊 FICHE PRODUIT — {op.name}"[:256],
         "description": (
-            f"🖼️ **Aperçu du marché** — {len(photos)} annonces similaires "
+            f"🖼️ **Aperçu du marché** — {len(photos)} annonces du même modèle "
             f"(vendeurs / variantes / prix différents)\n\n{description}"
         )[:3900],
         "color": color,
         "fields": fields,
-        "url": explore,
+        "url": ref_url or explore,
         "footer": {
             "text": (
                 f"📊 Fiches produit · {develop_note} · "
@@ -1116,12 +1130,13 @@ def build_fiche_discord_payload(sheet: NicheProductSheet) -> dict[str, Any]:
         main["image"] = {"url": photos[0]}
 
     embeds: list[dict[str, Any]] = [main]
-    for photo in photos[1:MAX_MOSAIC_PHOTOS]:
+    for item in mosaic_links[1:MAX_MOSAIC_PHOTOS]:
         embeds.append(
             {
-                "url": explore,
+                "url": item.listing_url or explore,
                 "color": color,
-                "image": {"url": photo},
+                "description": (item.title or "")[:256] or None,
+                "image": {"url": item.photo_url},
             }
         )
     return {"embeds": embeds}

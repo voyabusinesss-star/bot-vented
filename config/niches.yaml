@@ -1,6 +1,6 @@
 # Détecteur de niches — sondes exploratoires autonomes
-# Objectif : trouver des niches INEXPLOITÉES / sous-évaluées
-# sur TOUTES les catégories Vinted (pas seulement vêtements / chaussures)
+# Objectif : niches mode/chaussures actionnables (marque + type/modèle).
+# Collectibles uniquement via probes nommés (modèle explicite dans le titre).
 #
 # Lance via : uv run vinted-bot detector --loop
 
@@ -10,7 +10,7 @@ defaults:
   max_items_per_probe: 24
   max_items_per_catalog: 24
   # Combien de catalogues balayer par cycle (rotation) — limité anti-ban
-  catalog_sweep_per_cycle: 3
+  catalog_sweep_per_cycle: 2
   loop_interval_seconds: 600
   delay_between_probes_seconds: 4.5
   min_samples: 5
@@ -19,11 +19,9 @@ defaults:
   niche_cooldown_hours: 12
   max_discord_posts_per_cycle: 1
 
-# Balayage newest multi-domaines (rotation à chaque cycle)
+# Balayage newest — focus vêtements / chaussures (moins de bruit livres/jouets)
 # id: all = flux site entier ; sinon ID catalogue Vinted FR
 discovery_catalogs:
-  - id: all
-    label: "Tout Vinted"
   - id: 4
     label: "Vêtements femmes"
   - id: 5
@@ -32,12 +30,6 @@ discovery_catalogs:
     label: "Chaussures femmes"
   - id: 1242
     label: "Chaussures hommes"
-  - id: 1193
-    label: "Enfants"
-  - id: 1918
-    label: "Maison"
-  - id: 2993
-    label: "Divertissement / électronique"
 
 # Probes découverte — produits / licences / objets / micro-niches
 # (volontairement hors ultra-marques saturées)

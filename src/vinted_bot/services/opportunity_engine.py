@@ -58,6 +58,82 @@ _VAGUE_LABELS = frozenset(
         "vetement",
         "veste",
         "hoodie",
+        "livre",
+        "livres",
+        "jouet",
+        "jouets",
+        "collection",
+        "objet",
+        "star wars",
+        "pokemon",
+    }
+)
+_FASHION_DOMAINS = frozenset({"fashion", "shoes"})
+# Catégories trop larges seules (« veste », « pantalon »…) — exiger marque + modèle/type
+_FASHION_GENERIC_CATEGORIES = frozenset(
+    {
+        "veste",
+        "pantalon",
+        "hoodie",
+        "sweat",
+        "pull",
+        "tee",
+        "tshirt",
+        "chemise",
+        "short",
+        "jupe",
+        "robe",
+        "chaussure",
+        "chaussures",
+        "sneakers",
+        "vetement",
+        "accessoire",
+        "top",
+    }
+)
+# Style / segment utile dans la requête (pas une couleur)
+_TYPE_KEYWORD_FLAGS = frozenset(
+    {
+        "workwear",
+        "vintage",
+        "archive",
+        "y2k",
+        "gore_tex",
+        "streetwear",
+        "deadstock",
+        "heritage",
+        "outdoor",
+        "military",
+        "americana",
+    }
+)
+_COLOR_SEARCH_WORDS = frozenset(
+    {
+        "noir",
+        "black",
+        "blanc",
+        "white",
+        "beige",
+        "marron",
+        "brown",
+        "vert",
+        "olive",
+        "bleu",
+        "navy",
+        "rouge",
+        "red",
+        "gris",
+        "grey",
+        "gray",
+        "rose",
+        "pink",
+        "orange",
+        "jaune",
+        "violet",
+        "bordeaux",
+        "argent",
+        "silver",
+        "argentée",
     }
 )
 # Marques très connues : OK seulement avec modèle précis
@@ -151,6 +227,15 @@ _KNOWN_BRANDS = _FAMOUS_NEED_MODEL | _BROAD_BRANDS | frozenset(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class ReferenceListing:
+    """Photo + lien vers l'annonce Vinted analysée (référence Discord)."""
+
+    photo_url: str
+    listing_url: str
+    title: str
+
+
 @dataclass(slots=True, frozen=True)
 class Opportunity:
     niche_key: str
@@ -216,6 +301,8 @@ class Opportunity:
     action: str
     action_detail: str
     photo_url: str | None
+    photo_listing_url: str | None
+    photo_listing_title: str | None
     brand_slug: str | None
     model_slug: str | None
     category_slug: str | None
@@ -256,10 +343,16 @@ def has_sufficient_market_sample(snap: NicheSnapshot | Any) -> bool:
     return True
 
 
-def is_granular_niche(snap: NicheSnapshot | Any) -> bool:
-    """Niche actionnable : modèle, licence, objet, ou marque×catégorie (pas marque seule).
+def _is_fashion_niche(snap: NicheSnapshot | Any) -> bool:
+    from vinted_bot.services.market_entities import category_domain
 
-    Toujours sur un ensemble d'annonces similaires (≥ MIN_NICHE_LISTINGS).
+    return category_domain(getattr(snap, "category_slug", None)) in _FASHION_DOMAINS
+
+
+def is_granular_niche(snap: NicheSnapshot | Any) -> bool:
+    """Niche actionnable : marque+type/modèle (mode) ou modèle précis (collectibles).
+
+    Rejette catégories seules (Livre, Veste) et licences seules (Star Wars).
     """
     brand = (getattr(snap, "brand_slug", None) or "").strip().lower()
     model = (getattr(snap, "model_slug", None) or "").strip()
@@ -268,49 +361,40 @@ def is_granular_niche(snap: NicheSnapshot | Any) -> bool:
     n = int(getattr(snap, "listing_count", 0) or 0)
     tokens = _flag_tokens(flags)
 
-    # Règle dure : pas d'analyse niche sur un article isolé
     if n < MIN_NICHE_LISTINGS:
         return False
     if not has_sufficient_market_sample(snap):
         return False
 
-    if brand in _VAGUE_LABELS and not model and not flags and category not in _OBJECT_CATEGORIES:
+    if brand in _VAGUE_LABELS and not model:
         return False
-    # Marque absente : OK seulement avec modèle / licence / objet
-    if brand in {"", "inconnu", "unknown"} and not model and not flags:
-        if category not in _OBJECT_CATEGORIES or n < MIN_PRODUCT_OBJECT_N:
-            return False
-    # Ultra-marques fashion : modèle obligatoire
     if brand in _BROAD_BRANDS and not model:
         return False
     if brand in _FAMOUS_NEED_MODEL and not model:
         return False
-    # Niveau produit / modèle (prioritaire) — volume déjà validé
+
+    # Modèle / produit précis (mode ou collectibles)
     if model:
         return True
-    # Licence / collection / produit détecté dans les flags
-    if tokens & _LICENSE_FLAG_TOKENS:
-        return True
-    # Flags riches même sans marque connue (inconnu + style/licence)
-    if flags and len(flags) >= 4 and brand not in _BROAD_BRANDS:
-        return True
-    # Objet / jouet / déco / électronique : catégorie × (marque obscure|inconnu) avec volume
-    if category in _OBJECT_CATEGORIES and n >= MIN_PRODUCT_OBJECT_N:
-        if brand in {"", "inconnu"} or _is_obscure_brand(brand):
-            return True
-        if brand and brand not in _BROAD_BRANDS:
-            return True
-    # Marque × catégorie (hors ultra-marques) avec volume minimal
+
+    # Mode : marque connue + type vestimentaire (ex. Carhartt Veste, Lacoste veste)
     if (
         brand
-        and brand not in {"inconnu", ""}
-        and category
+        and brand not in {"", "inconnu", "unknown"}
         and brand not in _BROAD_BRANDS
         and brand not in _FAMOUS_NEED_MODEL
+        and category
+        and _is_fashion_niche(snap)
         and n >= MIN_BRAND_CATEGORY_N
     ):
         return True
-    if category and not model and not flags:
+
+    # Sans modèle : rejeter licence seule, objet seul, catégorie seule
+    if tokens & _LICENSE_FLAG_TOKENS:
+        return False
+    if category in _OBJECT_CATEGORIES:
+        return False
+    if category in _FASHION_GENERIC_CATEGORIES and brand in {"", "inconnu", "unknown"}:
         return False
     return False
 
@@ -730,21 +814,41 @@ def _ai_analysis(
     return " ".join(sentences)
 
 
+def _is_vague_search_token(token: str) -> bool:
+    t = (token or "").strip().lower().replace("_", " ")
+    if len(t) < 2:
+        return True
+    if t in _VAGUE_LABELS or t in _FASHION_GENERIC_CATEGORIES:
+        return True
+    if t in _COLOR_SEARCH_WORDS:
+        return True
+    return False
+
+
+def _type_flags_from_keyword_flags(flags: str) -> tuple[str, ...]:
+    tokens = _flag_tokens(flags)
+    out: list[str] = []
+    for tok in sorted(tokens):
+        if tok in _TYPE_KEYWORD_FLAGS:
+            out.append(tok.replace("_", " "))
+    return tuple(out)
+
+
 def _search_terms(snap: NicheSnapshot, name: str) -> tuple[str, ...]:
     terms: list[str] = []
-    if snap.brand_slug:
+    if snap.brand_slug and snap.brand_slug.lower() not in _VAGUE_LABELS:
         terms.append(snap.brand_slug.replace("_", " ").title())
     if snap.model_slug:
         terms.append(snap.model_slug.replace("_", " ").title())
-    elif snap.category_slug:
+    elif snap.category_slug and snap.category_slug not in _FASHION_GENERIC_CATEGORIES:
         terms.append(snap.category_slug.replace("_", " ").title())
-    if snap.keyword_flags:
-        terms.extend(
-            p.replace("_", " ") for p in snap.keyword_flags.split("+") if p
-        )
+    for flag in _type_flags_from_keyword_flags(snap.keyword_flags or ""):
+        if flag.lower() not in {t.lower() for t in terms}:
+            terms.append(flag.title())
     for tok in name.replace("·", " ").split():
-        if len(tok) >= 4 and tok.lower() not in {t.lower() for t in terms}:
-            terms.append(tok)
+        if len(tok) >= 4 and not _is_vague_search_token(tok):
+            if tok.lower() not in {t.lower() for t in terms}:
+                terms.append(tok)
     return tuple(dict.fromkeys(terms))[:8]
 
 
@@ -776,7 +880,7 @@ _ERA_TOKENS = (
 
 
 def _enrich_name_from_titles(base: str, titles: list[str]) -> str:
-    """Ajoute couleur / époque fréquentes pour un nom de niche actionnable."""
+    """Ajoute époque / édition fréquente — pas de couleur (niche trop étroite)."""
     if not titles:
         return base
     blob = " ".join(titles).lower()
@@ -785,13 +889,9 @@ def _enrich_name_from_titles(base: str, titles: list[str]) -> str:
         if needle in blob and label.lower() not in base.lower():
             extras.append(label)
             break
-    for needle, label in _COLOR_TOKENS:
-        if needle in blob and label.lower() not in base.lower():
-            extras.append(label)
-            break
     if not extras:
         return base
-    return f"{base} {' '.join(extras[:2])}".strip()
+    return f"{base} {' '.join(extras[:1])}".strip()
 
 
 def _sample_titles_for_snap(snap: NicheSnapshot, *, limit: int = 12) -> list[str]:
@@ -833,36 +933,26 @@ def _label(snap: NicheSnapshot, *, titles: list[str] | None = None) -> str:
             parts = [model]
         else:
             parts = [brand, model]
-    else:
-        license_tokens = sorted(
-            _flag_tokens(snap.keyword_flags or "") & _LICENSE_FLAG_TOKENS
-        )
+    elif not unknown and snap.category_slug and _is_fashion_niche(snap):
+        cat = snap.category_slug.replace("_", " ").title()
+        parts = [brand, cat]
+    elif not unknown and snap.category_slug:
+        return ""
+    elif snap.keyword_flags:
+        license_tokens = _flag_tokens(snap.keyword_flags or "") & _LICENSE_FLAG_TOKENS
         if license_tokens:
-            lic = license_tokens[0].replace("_", " ").title()
-            if snap.category_slug:
-                parts = [lic, snap.category_slug.replace("_", " ").title()]
-            else:
-                parts = [lic]
-        elif not unknown:
-            # Toujours garder la marque pour les niches marque×catégorie
-            parts = [brand]
-            if snap.keyword_flags:
-                parts.append(
-                    snap.keyword_flags.replace("+", " ").replace("_", " ").title()
-                )
-            elif snap.category_slug:
-                parts.append(snap.category_slug.replace("_", " ").title())
-        elif snap.keyword_flags:
-            parts = [
-                snap.keyword_flags.replace("+", " ").replace("_", " ").title()
-            ]
-            if snap.category_slug:
-                parts.append(snap.category_slug.replace("_", " ").title())
-        elif snap.category_slug and snap.category_slug not in _VAGUE_LABELS:
-            parts = [snap.category_slug.replace("_", " ").title()]
+            return ""
+        parts = [
+            snap.keyword_flags.replace("+", " ").replace("_", " ").title()
+        ]
 
     name = " ".join(parts).strip()
     if not name or name.lower() in _VAGUE_LABELS:
+        return ""
+    if len(name.split()) < 2 and name.lower() in {
+        *(c.replace("_", " ") for c in _FASHION_GENERIC_CATEGORIES),
+        *(c.replace("_", " ") for c in _OBJECT_CATEGORIES),
+    }:
         return ""
     flags = (snap.keyword_flags or "").lower()
     extras: list[str] = []
@@ -957,8 +1047,21 @@ def _listing_matches_niche(listing: Listing, snap: NicheSnapshot) -> bool:
     return bool(snap.category_slug) and listing.category_slug == snap.category_slug
 
 
-def _find_photo(snap: NicheSnapshot) -> str | None:
-    """Image de référence = une photo réelle parmi les annonces de la niche."""
+def _listing_url(listing: Listing) -> str:
+    url = (listing.url or "").strip()
+    if url.startswith("http"):
+        return url
+    from vinted_bot.config import get_settings
+
+    base = (get_settings().vinted_base_url or "https://www.vinted.fr").rstrip("/")
+    vid = getattr(listing, "vinted_id", None)
+    if vid:
+        return f"{base}/items/{vid}"
+    return base
+
+
+def _find_reference_listing(snap: NicheSnapshot) -> ReferenceListing | None:
+    """Photo de référence = annonce réelle qui matche la niche (pas une photo générique)."""
     brand = (snap.brand_slug or "").strip().lower()
     loose_brand = brand in {"", "inconnu", "unknown"}
     with session_scope() as session:
@@ -977,31 +1080,29 @@ def _find_photo(snap: NicheSnapshot) -> str | None:
                     Listing.title.ilike(model_like),
                 )
             )
+        elif snap.brand_slug and not loose_brand:
+            stmt = stmt.where(Listing.brand.ilike(f"%{brand.replace('_', '%')}%"))
         elif snap.category_slug:
             stmt = stmt.where(Listing.category_slug == snap.category_slug)
         rows = list(session.scalars(stmt).unique().all())
-        # 1) match strict niche
         for listing in rows:
             if not _listing_matches_niche(listing, snap):
                 continue
             cands = _photo_candidates_from_listing(listing)
-            if cands:
-                return cands[0]
-        # 2) fallback marque + photo
-        if not loose_brand:
-            for listing in rows:
-                listing_brand = normalize_brand(listing.brand) or "inconnu"
-                if listing_brand != brand:
-                    continue
-                cands = _photo_candidates_from_listing(listing)
-                if cands:
-                    return cands[0]
-        # 3) dernier recours : première photo du lot filtré
-        for listing in rows:
-            cands = _photo_candidates_from_listing(listing)
-            if cands:
-                return cands[0]
+            if not cands:
+                continue
+            title = (listing.title or snap.model_slug or snap.brand_slug or "Annonce").strip()
+            return ReferenceListing(
+                photo_url=cands[0],
+                listing_url=_listing_url(listing),
+                title=title[:120],
+            )
     return None
+
+
+def _find_photo(snap: NicheSnapshot) -> str | None:
+    ref = _find_reference_listing(snap)
+    return ref.photo_url if ref else None
 
 
 def _p75_from_snap(snap: NicheSnapshot) -> float | None:
@@ -1356,6 +1457,7 @@ def snapshot_to_opportunity(
         f"Confiance {conf_insight.label}. {intl.summary}."
     )
 
+    ref = _find_reference_listing(snap)
     return Opportunity(
         niche_key=snap.niche_key,
         name=name,
@@ -1413,7 +1515,9 @@ def snapshot_to_opportunity(
         strategy_sell=strategy_sell,
         action=action,
         action_detail=detail,
-        photo_url=_find_photo(snap),
+        photo_url=ref.photo_url if ref else None,
+        photo_listing_url=ref.listing_url if ref else None,
+        photo_listing_title=ref.title if ref else None,
         brand_slug=snap.brand_slug,
         model_slug=snap.model_slug,
         category_slug=snap.category_slug,
@@ -1709,12 +1813,20 @@ def select_opportunities(
         )
         obscure_boost = 10.0 if _is_obscure_brand(o.brand_slug) else 0.0
         product_boost = 4.0 if o.model_slug else 0.0
+        brand_model_boost = 6.0 if o.model_slug and o.brand_slug not in {
+            "",
+            "inconnu",
+            "unknown",
+        } else 0.0
         object_boost = (
-            8.0 if (o.category_slug or "") in _OBJECT_CATEGORIES else 0.0
+            8.0
+            if o.model_slug and (o.category_slug or "") in _OBJECT_CATEGORIES
+            else 0.0
         )
         license_boost = (
             5.0
-            if _flag_tokens(o.keyword_flags) & _LICENSE_FLAG_TOKENS
+            if o.model_slug
+            and _flag_tokens(o.keyword_flags) & _LICENSE_FLAG_TOKENS
             else 0.0
         )
         # Volume moyen = affaire inexploitée ; mega-volume = déjà chassé
@@ -1743,7 +1855,12 @@ def select_opportunities(
         conf_boost = (o.confidence - 50.0) * 0.08
         # Découverte large hors fashion bestsellers
         domain = category_domain(o.category_slug)
-        domain_boost = 6.0 if domain not in {"fashion", "shoes", "unknown"} else -2.0
+        if domain in _FASHION_DOMAINS:
+            domain_boost = 8.0
+        elif not o.model_slug:
+            domain_boost = -12.0
+        else:
+            domain_boost = 2.0
         return (
             o.score
             + type_boost
@@ -1751,6 +1868,7 @@ def select_opportunities(
             + known_pen
             + obscure_boost
             + product_boost
+            + brand_model_boost
             + object_boost
             + license_boost
             + volume_adj
@@ -1794,8 +1912,10 @@ def select_opportunities(
         if brand and brand not in {"inconnu", ""} and brand_counts.get(brand, 0) >= 2:
             continue
         domain = category_domain(op.category_slug)
-        # Fashion/sneakers : max 2 — le détecteur n'est pas un radar tendances mode
-        if domain in {"fashion", "shoes"} and domain_counts.get(domain, 0) >= 2:
+        if domain in _FASHION_DOMAINS:
+            if domain_counts.get(domain, 0) >= 2:
+                continue
+        elif domain_counts.get(domain, 0) >= 1:
             continue
         if domain_counts.get(domain, 0) >= 3:
             continue
@@ -1910,12 +2030,20 @@ def _radar_variants(op: Opportunity) -> list[str]:
     raw = (op.depth_summary or "").strip()
     if not raw or raw.startswith("peu de variantes"):
         return []
-    parts = [p.strip() for p in raw.split("·") if p.strip()]
+    parts: list[str] = []
+    for p in raw.split("·"):
+        p = p.strip()
+        if not p or len(p) <= 3:
+            continue
+        low = p.lower()
+        if low.startswith("couleur") or low.startswith("couleurs"):
+            continue
+        parts.append(p)
     return parts[:4]
 
 
 def _explore_search_query(op: Opportunity) -> str:
-    """Requête catalogue propre (marque + modèle / meilleurs termes)."""
+    """Requête catalogue : marque + modèle + type (workwear…), jamais « veste » seul."""
     junk = {
         "inconnu",
         "unknown",
@@ -1924,27 +2052,66 @@ def _explore_search_query(op: Opportunity) -> str:
         "opportunite",
     }
     terms: list[str] = []
+
+    def _add(raw: str) -> None:
+        t = (raw or "").strip()
+        if len(t) < 2 or t.lower() in junk or _is_vague_search_token(t):
+            return
+        if t.lower() in {x.lower() for x in terms}:
+            return
+        terms.append(t)
+
     if op.brand_slug and op.brand_slug.lower() not in junk:
-        terms.append(op.brand_slug.replace("_", " ").strip())
+        _add(op.brand_slug.replace("_", " ").strip())
     if op.model_slug:
-        terms.append(op.model_slug.replace("_", " ").strip())
+        _add(op.model_slug.replace("_", " ").strip())
+    for flag in _type_flags_from_keyword_flags(op.keyword_flags):
+        _add(flag)
+    if op.category_slug and op.brand_slug and op.brand_slug.lower() not in junk:
+        cat = op.category_slug.replace("_", " ").strip()
+        # Marque + type (ex. Lacoste veste, Carhartt workwear via flag)
+        if cat and (op.model_slug or len(terms) >= 1):
+            _add(cat)
     for t in op.search_terms:
-        tl = (t or "").strip()
-        if len(tl) < 2 or tl.lower() in junk:
-            continue
-        if tl.lower() in {x.lower() for x in terms}:
-            continue
-        terms.append(tl)
-        if len(terms) >= 4:
+        _add(t)
+        if len(terms) >= 5:
             break
-    if not terms:
-        # Nom de niche sans bruit
+    if len(terms) < 2:
         for tok in (op.name or "").replace("·", " ").split():
-            if len(tok) >= 3 and tok.lower() not in junk:
-                terms.append(tok)
+            _add(tok)
             if len(terms) >= 4:
                 break
-    return " ".join(terms).strip() or (op.name or "vinted").strip()
+    if len(terms) == 1 and _is_vague_search_token(terms[0]):
+        return ""
+    return " ".join(terms[:5]).strip()
+
+
+def explore_search_variants(op: Opportunity) -> list[str]:
+    """Variantes scrape / fiche — toujours marque + modèle ou marque + type."""
+    primary = _explore_search_query(op)
+    variants: list[str] = []
+    if primary:
+        variants.append(primary)
+    brand = (op.brand_slug or "").replace("_", " ").strip()
+    model = (op.model_slug or "").replace("_", " ").strip()
+    if brand and model:
+        variants.append(f"{brand} {model}".strip())
+    if brand:
+        for flag in _type_flags_from_keyword_flags(op.keyword_flags):
+            variants.append(f"{brand} {flag}".strip())
+            if model:
+                variants.append(f"{brand} {model} {flag}".strip())
+    for t in op.search_terms[:3]:
+        if t and not _is_vague_search_token(t):
+            variants.append(t)
+    cleaned: list[str] = []
+    for v in variants:
+        if isinstance(v, tuple):
+            v = " ".join(v)
+        v = str(v).strip()
+        if len(v) >= 4 and v not in cleaned:
+            cleaned.append(v)
+    return cleaned[:5] or ([primary] if primary else [])
 
 
 def _vinted_explore_url(op: Opportunity) -> str:
@@ -1954,7 +2121,14 @@ def _vinted_explore_url(op: Opportunity) -> str:
     from vinted_bot.config import get_settings
 
     base = (get_settings().vinted_base_url or "https://www.vinted.fr").rstrip("/")
-    query = _explore_search_query(op)
+    query = _explore_search_query(op) or (op.name or "").strip()
+    if not query:
+        parts = []
+        if op.brand_slug:
+            parts.append(op.brand_slug.replace("_", " "))
+        if op.model_slug:
+            parts.append(op.model_slug.replace("_", " "))
+        query = " ".join(parts).strip() or "vinted"
     # Format officiel catalog Vinted (search_text + tri récent)
     params: list[tuple[str, str]] = [
         ("search_text", query),
@@ -1985,26 +2159,42 @@ def build_opportunity_embed(
     demand_pct = _radar_demand_pct(op)
     sale_pct = _radar_sale_pct(op)
     why = _radar_why_lines(op)
-    keywords = list(op.search_terms[:5]) or [op.name]
+    explore = _vinted_explore_url(op)
+    search_q = _explore_search_query(op) or op.name
+    ref_url = (op.photo_listing_url or "").strip()
+    ref_title = (op.photo_listing_title or "").strip()
+    n = listings_analyzed if listings_analyzed is not None else op.sample_size
+    photo = _prefer_large_image_url(op.photo_url) if op.photo_url else None
+    keywords = [
+        k
+        for k in (list(op.search_terms[:5]) or [op.name])
+        if k and not _is_vague_search_token(k)
+    ]
+    if not keywords:
+        keywords = [search_q]
     kw_lines = "\n".join(f"• {k}" for k in keywords)
     variants = _radar_variants(op)
     var_block = (
         "\n".join(f"• {v}" for v in variants)
         if variants
-        else "• Variantes à explorer via les mots-clés"
+        else "• Modèle / marque précis — pas de recherche générique (« veste » seul)"
     )
-    explore = _vinted_explore_url(op)
-    search_q = _explore_search_query(op)
-    n = listings_analyzed if listings_analyzed is not None else op.sample_size
-    photo = _prefer_large_image_url(op.photo_url) if op.photo_url else None
 
-    # Lien dès le haut + titre cliquable (embed.url)
+    ref_line = ""
+    if ref_url:
+        ref_line = (
+            f"\n\n📷 **[Annonce analysée]({ref_url})**"
+            + (f" — _{ref_title[:90]}_" if ref_title else "")
+        )
+
+    # Lien dès le haut + titre cliquable (embed.url → annonce référence si dispo)
     description = (
         f"**{op.name}**\n\n"
         f"⭐ Opportunité : **{op.score:.0f}/100**\n"
         f"{score_stars(op.score)}\n\n"
         f"{badge_line}\n\n"
         f"🔗 [Voir les annonces similaires sur Vinted]({explore})"
+        f"{ref_line}"
     )
     fields = [
         {
@@ -2051,11 +2241,12 @@ def build_opportunity_embed(
         "description": description[:3900],
         "color": color,
         "fields": fields,
-        "url": explore,
+        "url": ref_url or explore,
         "footer": {
-            "text": f"📌 Analyse : {n:,} annonces analysées · clic titre = catalogue".replace(
-                ",", " "
-            )
+            "text": (
+                f"📌 Analyse : {n:,} annonces · "
+                f"{'clic titre = annonce référence' if ref_url else 'clic titre = catalogue'}"
+            ).replace(",", " ")
         },
         "timestamp": _utcnow().isoformat(),
     }

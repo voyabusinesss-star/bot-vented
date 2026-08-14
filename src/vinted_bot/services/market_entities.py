@@ -286,6 +286,64 @@ def detect_model(
     return None
 
 
+_EXTRA_BRAND_TITLE_ALIASES: dict[str, tuple[str, ...]] = {
+    "cp company": (
+        "c p company",
+        "cp company",
+        "c.p. company",
+        "cpcompany",
+    ),
+}
+
+
+@lru_cache(maxsize=1)
+def _brand_title_alias_pairs() -> tuple[tuple[str, str], ...]:
+    pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(slug: str, alias: str) -> None:
+        clean = alias.strip()
+        if not clean:
+            return
+        key = (slug, clean.lower())
+        if key in seen:
+            return
+        seen.add(key)
+        pairs.append((slug, clean))
+
+    try:
+        cfg = load_deal_filters()
+        for raw_brand in cfg.brands or []:
+            slug = normalize_brand(raw_brand)
+            if not slug:
+                continue
+            add(slug, slug)
+            add(slug, str(raw_brand))
+    except Exception:
+        pass
+    for model in load_model_defs():
+        if model.brand:
+            add(model.brand, model.brand.replace("_", " "))
+    for slug, extras in _EXTRA_BRAND_TITLE_ALIASES.items():
+        norm = normalize_brand(slug) or slug
+        add(norm, slug)
+        for alias in extras:
+            add(norm, alias)
+    pairs.sort(key=lambda p: len(p[1]), reverse=True)
+    return tuple(pairs)
+
+
+def detect_brand_from_title(title: str | None) -> str | None:
+    """Détecte une marque connue dans le titre si le champ Vinted est vide."""
+    haystack = f" {_normalize_text(title)} "
+    if not haystack.strip():
+        return None
+    for slug, alias in _brand_title_alias_pairs():
+        if _alias_pattern(alias).search(haystack):
+            return slug
+    return None
+
+
 def detect_keywords(
     title: str | None,
     *,
@@ -311,8 +369,12 @@ def extract_entities_from_text(
     description: str | None = None,
 ) -> ExtractedEntities:
     brand_slug = normalize_brand(brand) or "inconnu"
+    if brand_slug in {"", "inconnu"}:
+        from_title = detect_brand_from_title(title)
+        if from_title:
+            brand_slug = from_title
     category = detect_market_category(title)
-    model = detect_model(title, brand=brand, description=description)
+    model = detect_model(title, brand=brand_slug, description=description)
     # Si le modèle a une marque et le listing n'en a pas : rattacher la marque produit
     if model and model.brand and brand_slug in {"", "inconnu"}:
         brand_slug = model.brand
