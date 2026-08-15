@@ -86,6 +86,9 @@ def test_find_open_ticket_channel() -> None:
     found = find_open_ticket_channel(channels, category_id="cat", user_id="42")
     assert found is not None
     assert found["id"] == "10"
+    found_other = find_open_ticket_channel(channels, category_id="missing", user_id="42")
+    assert found_other is not None
+    assert found_other["id"] == "10"
     assert find_open_ticket_channel(channels, category_id="cat", user_id="99") is None
 
 

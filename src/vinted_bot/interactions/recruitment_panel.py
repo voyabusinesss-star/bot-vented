@@ -250,17 +250,20 @@ def find_open_ticket_channel(
     user_id: str,
 ) -> dict[str, Any] | None:
     topic_want = ticket_topic_for_user(user_id)
+    matches: list[dict[str, Any]] = []
     for ch in channels:
         if int(ch.get("type", -1)) != 0:
             continue
-        if str(ch.get("parent_id") or "") != str(category_id):
-            continue
-        if parse_ticket_opener_id(ch.get("topic")) == str(user_id):
-            return ch
-        # Fallback: topic exact
-        if str(ch.get("topic") or "") == topic_want:
-            return ch
-    return None
+        topic = str(ch.get("topic") or "")
+        if parse_ticket_opener_id(topic) == str(user_id) or topic == topic_want:
+            matches.append(ch)
+    if not matches:
+        return None
+    if category_id:
+        for ch in matches:
+            if str(ch.get("parent_id") or "") == str(category_id):
+                return ch
+    return matches[0]
 
 
 # Keep merge_view import used for gates compatibility / potential reuse

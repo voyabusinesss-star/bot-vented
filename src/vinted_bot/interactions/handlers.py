@@ -1345,7 +1345,7 @@ def handle_recruit_open(
             bot_user_id=bot_id,
             staff_role_id=staff_role,
         )
-        created = client.create_guild_channel(
+        created = client.create_ticket_channel(
             guild_id,
             name=channel_name,
             parent_id=category_id,
@@ -1577,7 +1577,7 @@ def handle_support_open(
             bot_user_id=bot_id,
             staff_role_id=staff_role,
         )
-        created = client.create_guild_channel(
+        created = client.create_ticket_channel(
             guild_id,
             name=channel_name,
             parent_id=category_id,

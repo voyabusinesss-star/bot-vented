@@ -399,6 +399,43 @@ class DiscordInteractionClient:
             )
         return response.json()
 
+    def create_ticket_channel(
+        self,
+        guild_id: str,
+        *,
+        name: str,
+        parent_id: str | None,
+        topic: str,
+        permission_overwrites: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Crée un salon ticket ; retente sans catégorie si les overwrites sont refusés."""
+        from vinted_bot.utils.logging import get_logger
+
+        log = get_logger(__name__)
+        try:
+            return self.create_guild_channel(
+                guild_id,
+                name=name,
+                parent_id=parent_id,
+                topic=topic,
+                permission_overwrites=permission_overwrites,
+            )
+        except RuntimeError as exc:
+            if not parent_id or "403" not in str(exc):
+                raise
+            log.warning(
+                "ticket_create_parent_forbidden_fallback_root",
+                parent_id=parent_id,
+                error=str(exc)[:160],
+            )
+            return self.create_guild_channel(
+                guild_id,
+                name=name,
+                parent_id=None,
+                topic=topic,
+                permission_overwrites=permission_overwrites,
+            )
+
     def delete_channel(self, channel_id: str) -> None:
         cid = str(channel_id or "").strip()
         if not cid:
