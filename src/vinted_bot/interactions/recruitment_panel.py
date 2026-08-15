@@ -74,8 +74,9 @@ def build_ticket_overwrites(
     bot_user_id: str,
     staff_role_id: str = "",
     extra_role_ids: list[str] | None = None,
+    deny_role_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """@everyone deny view ; candidat / bot / staff allow."""
+    """@everyone + rôles membres : deny view ; opener / bot / staff : allow."""
     overwrites = [
         _perm_overwrite(
             target_id=everyone_id,
@@ -93,7 +94,7 @@ def build_ticket_overwrites(
             allow=TICKET_STAFF_ALLOW,
         ),
     ]
-    role_ids = []
+    role_ids: list[str] = []
     if staff_role_id:
         role_ids.append(staff_role_id)
     for rid in extra_role_ids or []:
@@ -107,7 +108,58 @@ def build_ticket_overwrites(
                 allow=TICKET_STAFF_ALLOW,
             )
         )
+    staff_set = set(role_ids)
+    for rid in deny_role_ids or []:
+        if not rid or rid in staff_set:
+            continue
+        overwrites.append(
+            _perm_overwrite(
+                target_id=rid,
+                target_type=0,
+                deny=VIEW_CHANNEL,
+            )
+        )
     return overwrites
+
+
+def format_ticket_staff_mentions(role_ids: list[str]) -> str:
+    return " ".join(f"<@&{rid}>" for rid in role_ids if rid)
+
+
+def build_ticket_close_dm_payload(
+    *,
+    kind: str,
+    channel_name: str = "",
+) -> dict[str, Any]:
+    """Message MP envoyé à l'auteur du ticket à la fermeture."""
+    label = "aide" if kind == "aide" else "recrutement"
+    title = "🎫 Ticket aide fermé" if kind == "aide" else "🎫 Ticket recrutement fermé"
+    salon = f"**#{channel_name}**\n\n" if channel_name else ""
+    return {
+        "embeds": [
+            {
+                "title": title,
+                "description": (
+                    f"{salon}"
+                    "Ton ticket Resello est **clos**.\n\n"
+                    "📎 **Pièce jointe** : historique complet de la conversation "
+                    "(texte brut, lisible sur mobile et PC).\n\n"
+                    "_Merci d'avoir contacté le staff Resello._"
+                )[:4096],
+                "color": EMBED_COLOR,
+                "footer": {"text": "Resello · Support"},
+            }
+        ],
+    }
+
+
+def ticket_transcript_filename(*, kind: str, channel_name: str = "") -> str:
+    label = "aide" if kind == "aide" else "recrutement"
+    safe = re.sub(r"[^a-z0-9_-]+", "-", (channel_name or label).lower()).strip("-")
+    if not safe:
+        safe = label
+    stamp = datetime.now(ZoneInfo("Europe/Paris")).strftime("%Y%m%d")
+    return f"resello-ticket-{safe}-{stamp}.txt"
 
 
 def build_recruitment_panel_payload() -> dict[str, Any]:
@@ -213,9 +265,24 @@ def _message_timestamp_local(msg: dict[str, Any]) -> str:
         return str(raw)[:16]
 
 
-def format_ticket_transcript(messages: list[dict[str, Any]]) -> str:
+def format_ticket_transcript(
+    messages: list[dict[str, Any]],
+    *,
+    kind: str = "aide",
+    channel_name: str = "",
+) -> str:
     """messages: plus récent → plus ancien (API Discord) ; on inverse pour le log."""
-    lines = ["---- LOG DE TICKET ----", ""]
+    label = "aide" if kind == "aide" else "recrutement"
+    header_name = channel_name or f"ticket-{label}"
+    now = datetime.now(ZoneInfo("Europe/Paris")).strftime("%d/%m/%Y %H:%M")
+    lines = [
+        "Resello — Historique du ticket",
+        f"Type : {label}",
+        f"Salon : #{header_name}",
+        f"Export : {now} (Europe/Paris)",
+        "━" * 40,
+        "",
+    ]
     ordered = list(reversed(messages))
     for msg in ordered:
         author = _message_author_label(msg)
@@ -228,19 +295,19 @@ def format_ticket_transcript(messages: list[dict[str, Any]]) -> str:
         for emb in embeds:
             title = (emb.get("title") or "").strip()
             desc = (emb.get("description") or "").strip()
-            if title or desc:
-                bits.append(f"<EMBED {title or 'sans titre'}>")
-                if desc:
-                    bits.append(desc)
+            if title:
+                bits.append(f"[{title}]")
+            if desc:
+                bits.append(desc)
         attachments = msg.get("attachments") or []
         for att in attachments:
             name = att.get("filename") or "fichier"
-            bits.append(f"[fichier: {name}]")
-        body = "\n".join(bits).strip() or "(message vide)"
-        lines.append(f"{stamp} - {author}: {body}")
+            bits.append(f"(pièce jointe : {name})")
+        body = "\n".join(bits).strip() or "—"
+        lines.append(f"[{stamp}] {author}")
+        lines.append(body)
         lines.append("")
-    text = "\n".join(lines).strip() + "\n"
-    return text
+    return "\n".join(lines).strip() + "\n"
 
 
 def find_open_ticket_channel(
@@ -276,6 +343,9 @@ __all__ = [
     "ticket_topic_for_user",
     "parse_ticket_opener_id",
     "build_ticket_overwrites",
+    "build_ticket_close_dm_payload",
+    "format_ticket_staff_mentions",
+    "ticket_transcript_filename",
     "build_recruitment_panel_payload",
     "build_ticket_candidature_payload",
     "format_ticket_transcript",

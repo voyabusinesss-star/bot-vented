@@ -1062,6 +1062,43 @@ class DiscordInteractionClient:
         rid = sanitize_discord_channel_id(raw)
         return rid or self.recruitment_staff_role_id()
 
+    def ticket_staff_role_ids(self) -> list[str]:
+        """Rôles staff tickets : admin support + owner."""
+        from vinted_bot.config import sanitize_discord_channel_id
+
+        ids: list[str] = []
+        for raw in (
+            getattr(self.settings, "discord_role_support_staff", ""),
+            getattr(self.settings, "discord_role_recruitment_staff", ""),
+            getattr(self.settings, "discord_role_owner", ""),
+        ):
+            rid = sanitize_discord_channel_id(str(raw or ""))
+            if rid and rid not in ids:
+                ids.append(rid)
+        if not ids:
+            fallback = self.recruitment_staff_role_id()
+            if fallback:
+                ids.append(fallback)
+        return ids
+
+    def ticket_private_deny_role_ids(self) -> list[str]:
+        """Rôles membres à bloquer explicitement sur un salon ticket."""
+        from vinted_bot.config import sanitize_discord_channel_id
+
+        staff = set(self.ticket_staff_role_ids())
+        ids: list[str] = []
+        for raw in (
+            getattr(self.settings, "discord_role_reglement_verified", ""),
+            getattr(self.settings, "discord_role_sub_starter", ""),
+            getattr(self.settings, "discord_role_sub_pro", ""),
+            getattr(self.settings, "discord_role_sub_proplus", ""),
+            getattr(self.settings, "discord_role_resello_vip", ""),
+        ):
+            rid = sanitize_discord_channel_id(str(raw or ""))
+            if rid and rid not in staff and rid not in ids:
+                ids.append(rid)
+        return ids
+
     def fournisseurs_channel_id(self) -> str:
         from vinted_bot.config import sanitize_discord_channel_id
 

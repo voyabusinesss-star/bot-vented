@@ -326,6 +326,8 @@ class Settings(BaseSettings):
     discord_category_recruitment_tickets: str = ""
     # Rôle staff qui voit / gère les tickets (ex. Sous Responsable)
     discord_role_recruitment_staff: str = ""
+    # Rôle owner (accès tickets staff)
+    discord_role_owner: str = ""
     # Salon panneau tickets aide / support
     discord_channel_support: str = ""
     discord_webhook_support: str = ""

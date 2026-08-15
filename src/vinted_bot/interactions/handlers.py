@@ -30,12 +30,15 @@ from vinted_bot.interactions.recruitment_panel import (
     RECRUIT_CLOSE,
     RECRUIT_OPEN,
     build_ticket_candidature_payload,
+    build_ticket_close_dm_payload,
     build_ticket_overwrites,
     find_open_ticket_channel,
+    format_ticket_staff_mentions,
     format_ticket_transcript,
     parse_ticket_opener_id,
     sanitize_ticket_channel_name,
     ticket_topic_for_user,
+    ticket_transcript_filename,
 )
 from vinted_bot.interactions.support_panel import (
     SUPPORT_CLOSE,
@@ -1254,17 +1257,98 @@ def handle_reglement_accept(
     log.info("reglement_accepted", user_id=user_id, role_id=role_id)
 
 
-def _is_recruitment_staff(interaction: dict[str, Any], client: DiscordInteractionClient) -> bool:
+def _is_ticket_staff(interaction: dict[str, Any], client: DiscordInteractionClient) -> bool:
     user = _interaction_user(interaction)
     user_id = int(user.get("id") or 0)
     if user_id and _is_filter_admin(user_id):
         return True
-    staff_role = client.recruitment_staff_role_id()
-    if not staff_role:
+    staff_roles = set(client.ticket_staff_role_ids())
+    if not staff_roles:
         return False
-    member = interaction.get("member") or {}
-    roles = {str(r) for r in (member.get("roles") or [])}
-    return staff_role in roles
+    return bool(staff_roles & _member_role_ids(interaction))
+
+
+def _ticket_overwrites_for_open(
+    client: DiscordInteractionClient,
+    *,
+    guild_id: str,
+    user_id: str,
+    bot_id: str,
+) -> list[dict[str, Any]]:
+    staff_roles = client.ticket_staff_role_ids()
+    return build_ticket_overwrites(
+        everyone_id=guild_id,
+        opener_user_id=user_id,
+        bot_user_id=bot_id,
+        staff_role_id=staff_roles[0] if staff_roles else "",
+        extra_role_ids=staff_roles[1:],
+        deny_role_ids=client.ticket_private_deny_role_ids(),
+    )
+
+
+def _finalize_ticket_close(
+    client: DiscordInteractionClient,
+    interaction: dict[str, Any],
+    *,
+    channel_id: str,
+    channel_name: str,
+    opener_id: str,
+    closed_by_user_id: str,
+    kind: str,
+    log_event: str,
+) -> None:
+    collected: list[dict[str, Any]] = []
+    before: str | None = None
+    for _ in range(20):
+        batch = client.list_channel_messages(channel_id, limit=100, before=before)
+        if not batch:
+            break
+        collected.extend(batch)
+        before = str(batch[-1].get("id") or "") or None
+        if len(batch) < 100:
+            break
+
+    transcript = format_ticket_transcript(
+        collected,
+        kind=kind,
+        channel_name=channel_name,
+    )
+    filename = ticket_transcript_filename(kind=kind, channel_name=channel_name)
+    dm_target = opener_id or closed_by_user_id
+    if dm_target:
+        try:
+            client.send_dm_payload(
+                dm_target,
+                build_ticket_close_dm_payload(kind=kind, channel_name=channel_name),
+                attachments=[(filename, transcript.encode("utf-8"), "text/plain")],
+            )
+        except Exception as dm_exc:  # noqa: BLE001
+            log.warning(
+                f"{log_event}_transcript_dm_failed",
+                user_id=dm_target,
+                error=str(dm_exc)[:200],
+            )
+
+    client.delete_channel(channel_id)
+    is_opener = opener_id == closed_by_user_id
+    if is_opener:
+        confirm = "✅ Ticket fermé. L'historique t'a été envoyé en message privé."
+    else:
+        confirm = (
+            "✅ Ticket fermé. L'historique a été envoyé au membre en message privé."
+        )
+    client.edit_original(interaction["token"], content=confirm)
+    log.info(
+        log_event,
+        closed_by=closed_by_user_id,
+        opener_id=opener_id,
+        channel_id=channel_id,
+        messages=len(collected),
+    )
+
+
+def _is_recruitment_staff(interaction: dict[str, Any], client: DiscordInteractionClient) -> bool:
+    return _is_ticket_staff(interaction, client)
 
 
 def handle_recruit_open(
@@ -1338,12 +1422,12 @@ def handle_recruit_open(
         if not bot_id:
             raise RuntimeError("Impossible de déterminer l'ID du bot")
 
-        staff_role = client.recruitment_staff_role_id()
-        overwrites = build_ticket_overwrites(
-            everyone_id=guild_id,
-            opener_user_id=user_id,
-            bot_user_id=bot_id,
-            staff_role_id=staff_role,
+        staff_roles = client.ticket_staff_role_ids()
+        overwrites = _ticket_overwrites_for_open(
+            client,
+            guild_id=guild_id,
+            user_id=user_id,
+            bot_id=bot_id,
         )
         created = client.create_ticket_channel(
             guild_id,
@@ -1356,7 +1440,7 @@ def handle_recruit_open(
         if not ticket_id:
             raise RuntimeError("Salon ticket créé sans id")
 
-        staff_mention = f"<@&{staff_role}>" if staff_role else ""
+        staff_mention = format_ticket_staff_mentions(staff_roles)
         payload = build_ticket_candidature_payload(
             opener_mention=f"<@{user_id}>",
             staff_mention=staff_mention,
@@ -1431,53 +1515,15 @@ def handle_recruit_close(
             )
             return
 
-        # Collect transcript (paginate)
-        collected: list[dict[str, Any]] = []
-        before: str | None = None
-        for _ in range(20):
-            batch = client.list_channel_messages(
-                channel_id, limit=100, before=before
-            )
-            if not batch:
-                break
-            collected.extend(batch)
-            before = str(batch[-1].get("id") or "") or None
-            if len(batch) < 100:
-                break
-
-        transcript = format_ticket_transcript(collected)
-        transcript_bytes = transcript.encode("utf-8")
-
-        dm_target = opener_id or user_id
-        try:
-            client.send_dm_payload(
-                dm_target,
-                {
-                    "content": (
-                        "Votre ticket a été fermé.\n"
-                        "Voici un transcript du ticket."
-                    ),
-                },
-                attachments=[("log.txt", transcript_bytes, "text/plain")],
-            )
-        except Exception as dm_exc:  # noqa: BLE001
-            log.warning(
-                "recruit_transcript_dm_failed",
-                user_id=dm_target,
-                error=str(dm_exc)[:200],
-            )
-
-        client.delete_channel(channel_id)
-        client.edit_original(
-            interaction["token"],
-            content="✅ Ticket fermé. Un transcript t'a été envoyé en message privé.",
-        )
-        log.info(
-            "recruit_ticket_closed",
-            closed_by=user_id,
-            opener_id=opener_id,
+        _finalize_ticket_close(
+            client,
+            interaction,
             channel_id=channel_id,
-            messages=len(collected),
+            channel_name=str(channel.get("name") or ""),
+            opener_id=opener_id,
+            closed_by_user_id=user_id,
+            kind="recrutement",
+            log_event="recruit_ticket_closed",
         )
     except Exception as exc:  # noqa: BLE001
         log.warning(
@@ -1496,16 +1542,7 @@ def handle_recruit_close(
 
 
 def _is_support_staff(interaction: dict[str, Any], client: DiscordInteractionClient) -> bool:
-    user = _interaction_user(interaction)
-    user_id = int(user.get("id") or 0)
-    if user_id and _is_filter_admin(user_id):
-        return True
-    staff_role = client.support_staff_role_id()
-    if not staff_role:
-        return False
-    member = interaction.get("member") or {}
-    roles = {str(r) for r in (member.get("roles") or [])}
-    return staff_role in roles
+    return _is_ticket_staff(interaction, client)
 
 
 def handle_support_open(
@@ -1570,12 +1607,12 @@ def handle_support_open(
         if not bot_id:
             raise RuntimeError("Impossible de déterminer l'ID du bot")
 
-        staff_role = client.support_staff_role_id()
-        overwrites = build_ticket_overwrites(
-            everyone_id=guild_id,
-            opener_user_id=user_id,
-            bot_user_id=bot_id,
-            staff_role_id=staff_role,
+        staff_roles = client.ticket_staff_role_ids()
+        overwrites = _ticket_overwrites_for_open(
+            client,
+            guild_id=guild_id,
+            user_id=user_id,
+            bot_id=bot_id,
         )
         created = client.create_ticket_channel(
             guild_id,
@@ -1588,7 +1625,7 @@ def handle_support_open(
         if not ticket_id:
             raise RuntimeError("Salon ticket créé sans id")
 
-        staff_mention = f"<@&{staff_role}>" if staff_role else ""
+        staff_mention = format_ticket_staff_mentions(staff_roles)
         payload = build_support_ticket_payload(
             opener_mention=f"<@{user_id}>",
             staff_mention=staff_mention,
@@ -1657,51 +1694,15 @@ def handle_support_close(
             )
             return
 
-        collected: list[dict[str, Any]] = []
-        before: str | None = None
-        for _ in range(20):
-            batch = client.list_channel_messages(
-                channel_id, limit=100, before=before
-            )
-            if not batch:
-                break
-            collected.extend(batch)
-            before = str(batch[-1].get("id") or "") or None
-            if len(batch) < 100:
-                break
-
-        transcript = format_ticket_transcript(collected)
-        transcript_bytes = transcript.encode("utf-8")
-        dm_target = opener_id or user_id
-        try:
-            client.send_dm_payload(
-                dm_target,
-                {
-                    "content": (
-                        "Votre ticket aide a été fermé.\n"
-                        "Voici un transcript du ticket."
-                    ),
-                },
-                attachments=[("log.txt", transcript_bytes, "text/plain")],
-            )
-        except Exception as dm_exc:  # noqa: BLE001
-            log.warning(
-                "support_transcript_dm_failed",
-                user_id=dm_target,
-                error=str(dm_exc)[:200],
-            )
-
-        client.delete_channel(channel_id)
-        client.edit_original(
-            interaction["token"],
-            content="✅ Ticket fermé. Un transcript t'a été envoyé en message privé.",
-        )
-        log.info(
-            "support_ticket_closed",
-            closed_by=user_id,
-            opener_id=opener_id,
+        _finalize_ticket_close(
+            client,
+            interaction,
             channel_id=channel_id,
-            messages=len(collected),
+            channel_name=str(channel.get("name") or ""),
+            opener_id=opener_id,
+            closed_by_user_id=user_id,
+            kind="aide",
+            log_event="support_ticket_closed",
         )
     except Exception as exc:  # noqa: BLE001
         log.warning(

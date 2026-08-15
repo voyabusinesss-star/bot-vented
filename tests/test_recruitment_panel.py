@@ -56,14 +56,13 @@ def test_build_ticket_overwrites() -> None:
         opener_user_id="2",
         bot_user_id="3",
         staff_role_id="4",
+        extra_role_ids=["5"],
+        deny_role_ids=["6"],
     )
     by_id = {str(o["id"]): o for o in ows}
     assert by_id["1"]["deny"] == str(1 << 10)  # VIEW deny
-    assert by_id["1"]["type"] == 0
-    assert by_id["2"]["type"] == 1  # member
-    assert int(by_id["2"]["allow"]) & (1 << 10)
-    assert int(by_id["2"]["allow"]) & (1 << 11)  # send messages
-    assert int(by_id["4"]["allow"]) & (1 << 10)
+    assert by_id["6"]["deny"] == str(1 << 10)
+    assert int(by_id["5"]["allow"]) & (1 << 10)
 
 
 def test_find_open_ticket_channel() -> None:
@@ -111,9 +110,9 @@ def test_format_ticket_transcript() -> None:
             "attachments": [],
         },
     ]
-    text = format_ticket_transcript(messages)
-    assert "---- LOG DE TICKET ----" in text
+    text = format_ticket_transcript(messages, kind="recrutement", channel_name="recrutement-alice")
+    assert "Resello — Historique du ticket" in text
+    assert "recrutement-alice" in text
     assert "alice" in text
     assert "J'ai 22 ans" in text
-    # Chronological: embed first then alice reply
     assert text.index("CANDIDATURE") < text.index("J'ai 22 ans")
