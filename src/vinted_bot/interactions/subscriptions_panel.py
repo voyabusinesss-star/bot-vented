@@ -121,10 +121,22 @@ def build_subscription_embed_payload(
         f"> {tier.quote}",
         "",
         f"💳 **{tier.price}**",
-        "",
-        "👆 Utilise le bouton **Lien …** en haut du salon "
-        "pour un accès **automatique**.",
     ]
+    if checkout_url:
+        lines.extend(
+            [
+                "",
+                f"🔗 **[Rejoindre sur Whop]({checkout_url})**",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "",
+                "👆 Utilise le bouton **Lien …** en haut du salon "
+                "pour un accès **automatique**.",
+            ]
+        )
 
     embed: dict[str, Any] = {
         "title": tier.title,
@@ -133,7 +145,22 @@ def build_subscription_embed_payload(
         "image": {"url": f"attachment://{banner_filename}"},
         "footer": {"text": "Resello · Abonnements"},
     }
-    return {"embeds": [embed]}
+    payload: dict[str, Any] = {"embeds": [embed]}
+    if checkout_url:
+        payload["components"] = [
+            {
+                "type": 1,
+                "components": [
+                    {
+                        "type": 2,
+                        "style": 5,
+                        "label": "💳 Rejoindre",
+                        "url": checkout_url,
+                    }
+                ],
+            }
+        ]
+    return payload
 
 
 def build_subscriptions_intro_payload() -> dict[str, Any]:
@@ -210,6 +237,116 @@ def purge_subscriptions_channel(client: Any, channel_id: str) -> int:
     except Exception as exc:  # noqa: BLE001
         log.debug("subscriptions_purge_failed", error=str(exc)[:120])
     return deleted
+
+
+def _tier_from_message(msg: dict[str, Any]) -> str | None:
+    embeds = msg.get("embeds") or []
+    if not embeds:
+        return None
+    title = str((embeds[0] or {}).get("title") or "").upper()
+    if "PRO+" in title or "PRO +" in title:
+        return "proplus"
+    if "PRO" in title:
+        return "pro"
+    if "STARTER" in title:
+        return "starter"
+    if "NOS OFFRES" in title or "💎" in str((embeds[0] or {}).get("title") or ""):
+        return "intro"
+    return None
+
+
+def delete_bot_messages_for_tiers(
+    client: Any,
+    channel_id: str,
+    *,
+    tiers: set[str],
+) -> int:
+    """Supprime les messages bot correspondant aux tiers demandés."""
+    from vinted_bot.config import discord_application_id
+
+    token = getattr(client.settings, "discord_bot_token", "") or ""
+    bot_id = discord_application_id(token)
+    if not bot_id:
+        return 0
+    deleted = 0
+    try:
+        response = client._client.get(
+            f"/channels/{channel_id}/messages",
+            params={"limit": 50},
+        )
+        if response.status_code != 200:
+            return 0
+        for msg in response.json():
+            author = msg.get("author") or {}
+            if str(author.get("id")) != bot_id:
+                continue
+            tier = _tier_from_message(msg)
+            if tier not in tiers:
+                continue
+            try:
+                client.delete_channel_message(channel_id, str(msg["id"]))
+                deleted += 1
+            except Exception:  # noqa: BLE001
+                pass
+    except Exception as exc:  # noqa: BLE001
+        log.debug("subscriptions_tier_delete_failed", error=str(exc)[:120])
+    return deleted
+
+
+def post_subscription_tiers(
+    client: Any,
+    *,
+    channel_id: str,
+    guild_id: str,
+    tiers: tuple[str, ...],
+    webhook_url: str | None = None,
+    images_dir: str | None = None,
+    replace: bool = True,
+) -> list[dict[str, Any]]:
+    """Publie (ou remplace) les cartes Starter / Pro / Pro+."""
+    tier_set = {t.strip().lower() for t in tiers if t.strip()}
+    by_key = {t.key: t for t in SUBSCRIPTION_TIERS}
+    unknown = sorted(tier_set - set(by_key.keys()))
+    if unknown:
+        raise ValueError(f"Tiers inconnus : {', '.join(unknown)}")
+
+    if replace:
+        removed = delete_bot_messages_for_tiers(client, channel_id, tiers=tier_set)
+        if removed:
+            log.info(
+                "subscriptions_tiers_purged",
+                channel_id=channel_id,
+                tiers=sorted(tier_set),
+                removed=removed,
+            )
+
+    posted: list[dict[str, Any]] = []
+    for key in SUBSCRIPTION_TIERS:
+        tier = by_key[key.key]
+        if tier.key not in tier_set:
+            continue
+        banner_name, banner_bytes = load_banner_bytes(tier, base_dir=images_dir)
+        payload = build_subscription_embed_payload(
+            tier,
+            banner_filename=banner_name,
+            checkout_url=_checkout_url(tier),
+        )
+        message = client.post_channel_payload_as_guild_with_attachments(
+            channel_id,
+            payload,
+            guild_id=guild_id,
+            webhook_url=webhook_url,
+            attachments=[(banner_name, banner_bytes, IMAGE_MIME)],
+        )
+        posted.append(message)
+        log.info(
+            "subscriptions_tier_posted",
+            channel_id=channel_id,
+            message_id=message.get("id"),
+            tier=tier.key,
+            banner=banner_name,
+        )
+    return posted
 
 
 def post_subscriptions_messages(
