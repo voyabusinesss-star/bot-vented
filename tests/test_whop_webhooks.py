@@ -18,6 +18,7 @@ from vinted_bot.services.whop_webhooks import (
     parse_whop_envelope,
     plan_for_product_id,
     product_plan_map,
+    resolve_whop_checkout_url,
     roles_for_plan,
     verify_whop_signature,
 )
@@ -52,7 +53,54 @@ def test_product_plan_map() -> None:
     assert plan_for_product_id("prod_unknown", settings=settings) is None
 
 
-def test_extract_discord_from_custom_field() -> None:
+def test_resolve_whop_checkout_url_prefers_plan_over_legacy_store(monkeypatch) -> None:
+    settings = SimpleNamespace(
+        whop_plan_starter="plan_starter_live",
+        whop_plan_pro="plan_pro_live",
+        whop_plan_proplus="plan_plus_live",
+        whop_product_starter="prod_starter",
+        whop_product_pro="prod_pro",
+        whop_product_proplus="prod_plus",
+        whop_company_id="biz_test",
+        whop_api_key="",
+        subscriptions_checkout_starter="https://whop.com/resello-7eb1/resello-bf/",
+        subscriptions_checkout_pro="https://whop.com/resello-7eb1/resello-0b/",
+        subscriptions_checkout_proplus="https://whop.com/resello-7eb1/resello-e3/",
+        subscriptions_checkout_url="",
+    )
+    assert (
+        resolve_whop_checkout_url("starter", settings=settings)
+        == "https://whop.com/checkout/plan_starter_live"
+    )
+    assert (
+        resolve_whop_checkout_url("pro", settings=settings)
+        == "https://whop.com/checkout/plan_pro_live"
+    )
+    assert (
+        resolve_whop_checkout_url("proplus", settings=settings)
+        == "https://whop.com/checkout/plan_plus_live"
+    )
+
+
+def test_resolve_whop_checkout_url_uses_checkout_env_when_no_plan(monkeypatch) -> None:
+    settings = SimpleNamespace(
+        whop_plan_starter="",
+        whop_plan_pro="",
+        whop_plan_proplus="",
+        whop_product_starter="",
+        whop_product_pro="",
+        whop_product_proplus="",
+        whop_company_id="",
+        whop_api_key="",
+        subscriptions_checkout_starter="",
+        subscriptions_checkout_pro="https://whop.com/checkout/plan_pro_env",
+        subscriptions_checkout_proplus="",
+        subscriptions_checkout_url="",
+    )
+    assert (
+        resolve_whop_checkout_url("pro", settings=settings)
+        == "https://whop.com/checkout/plan_pro_env"
+    )
     data = {
         "custom_field_responses": [
             {"question": "Ton ID Discord", "answer": "123456789012345678"},

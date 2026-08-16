@@ -137,8 +137,68 @@ def _plan_id_from_checkout_url(url: str) -> str:
     text = (url or "").strip()
     if not text:
         return ""
+    match = re.search(r"/checkout/(plan_[^/?#]+)", text)
+    if match:
+        return match.group(1)
     match = re.search(r"(plan_[A-Za-z0-9]+)", text)
     return match.group(1) if match else ""
+
+
+_LEGACY_WHOP_STORE_SUFFIXES = (
+    "/resello-0b/",
+    "/resello-e3/",
+    "/resello-0b",
+    "/resello-e3",
+)
+
+
+def _is_legacy_whop_store_url(url: str) -> bool:
+    """Anciennes pages produit masquées du catalogue Whop."""
+    text = (url or "").strip().lower()
+    if not text:
+        return False
+    return any(suffix in text for suffix in _LEGACY_WHOP_STORE_SUFFIXES)
+
+
+def _subscriptions_checkout_env(settings: Settings, tier: str) -> str:
+    tier_n = (tier or "").strip().lower()
+    env_map = {
+        "starter": str(getattr(settings, "subscriptions_checkout_starter", "") or "").strip(),
+        "pro": str(getattr(settings, "subscriptions_checkout_pro", "") or "").strip(),
+        "premium": str(getattr(settings, "subscriptions_checkout_pro", "") or "").strip(),
+        "proplus": str(getattr(settings, "subscriptions_checkout_proplus", "") or "").strip(),
+        "pro+": str(getattr(settings, "subscriptions_checkout_proplus", "") or "").strip(),
+        "elite": str(getattr(settings, "subscriptions_checkout_proplus", "") or "").strip(),
+    }
+    return env_map.get(tier_n, "")
+
+
+def resolve_whop_checkout_url(
+    tier: str,
+    *,
+    settings: Settings | None = None,
+) -> str:
+    """URL checkout Whop canonique pour un tier (WHOP_PLAN → API, pas vieux liens store)."""
+    s = settings or get_settings()
+    tier_n = (tier or "").strip().lower()
+    plan_id = resolve_whop_plan_id(tier_n, settings=s)
+    if plan_id:
+        return f"https://whop.com/checkout/{plan_id}"
+
+    configured = _subscriptions_checkout_env(s, tier_n)
+    if configured and not _is_legacy_whop_store_url(configured):
+        plan_from_url = _plan_id_from_checkout_url(configured)
+        if plan_from_url:
+            return f"https://whop.com/checkout/{plan_from_url}"
+        if configured.startswith("https://whop.com/") and "/checkout/" in configured:
+            return configured.rstrip("/") + "/"
+
+    global_url = str(getattr(s, "subscriptions_checkout_url", "") or "").strip()
+    if global_url and not _is_legacy_whop_store_url(global_url):
+        plan_from_url = _plan_id_from_checkout_url(global_url)
+        if plan_from_url:
+            return f"https://whop.com/checkout/{plan_from_url}"
+    return ""
 
 
 def product_plan_map(settings: Settings | None = None) -> dict[str, str]:
@@ -719,19 +779,7 @@ def create_checkout_url_for_discord(
 
     s = settings or get_settings()
     tier_n = (tier or "").strip().lower()
-    static_by_tier = {
-        "starter": str(getattr(s, "subscriptions_checkout_starter", "") or "").strip(),
-        "pro": str(getattr(s, "subscriptions_checkout_pro", "") or "").strip(),
-        "premium": str(getattr(s, "subscriptions_checkout_pro", "") or "").strip(),
-        "proplus": str(getattr(s, "subscriptions_checkout_proplus", "") or "").strip(),
-        "pro+": str(getattr(s, "subscriptions_checkout_proplus", "") or "").strip(),
-        "elite": str(getattr(s, "subscriptions_checkout_proplus", "") or "").strip(),
-    }
-    static_url = static_by_tier.get(tier_n, "")
-    if not static_url:
-        plan_id_for_static = resolve_whop_plan_id(tier_n, settings=s)
-        if plan_id_for_static:
-            static_url = f"https://whop.com/checkout/{plan_id_for_static}"
+    static_url = resolve_whop_checkout_url(tier_n, settings=s)
 
     headers = _whop_api_headers(s)
     plan_id = resolve_whop_plan_id(tier_n, settings=s)

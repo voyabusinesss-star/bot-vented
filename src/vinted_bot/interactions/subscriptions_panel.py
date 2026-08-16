@@ -100,17 +100,10 @@ def resolve_subscriptions_dir(raw: str | None = None) -> Path:
 
 
 def _checkout_url(tier: SubscriptionTier) -> str | None:
-    settings = get_settings()
-    per_tier = {
-        "starter": getattr(settings, "subscriptions_checkout_starter", "") or "",
-        "pro": getattr(settings, "subscriptions_checkout_pro", "") or "",
-        "proplus": getattr(settings, "subscriptions_checkout_proplus", "") or "",
-    }
-    url = (per_tier.get(tier.key) or "").strip()
-    if url:
-        return url
-    global_url = (getattr(settings, "subscriptions_checkout_url", "") or "").strip()
-    return global_url or None
+    from vinted_bot.services.whop_webhooks import resolve_whop_checkout_url
+
+    url = resolve_whop_checkout_url(tier.key)
+    return url or None
 
 
 def build_subscription_embed_payload(
