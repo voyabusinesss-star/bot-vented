@@ -165,9 +165,11 @@ def build_subscriptions_intro_payload() -> dict[str, Any]:
             f"🟢 **Starter — {_short('starter')}**\n"
             f"🔵 **Pro — {_short('pro')} ⭐**\n"
             f"🟣 **Pro+ — {_short('proplus')}**\n\n"
-            "**Important :** clique un bouton **Lien …** ci-dessous "
-            "pour rejoindre. Le paiement est lié à ton Discord → "
-            "le rôle est attribué **automatiquement** (sans admin).\n\n"
+            "**Rôle automatique après paiement :**\n"
+            "1. Clique **Lien Starter / Pro / Pro+** ci-dessous → paie *(recommandé)*\n"
+            "2. **Ou** lie Discord sur [Whop](https://whop.com/@me/settings/connected-accounts/) "
+            "→ paie via **Clique ici pour rejoindre** sur une carte\n"
+            "3. **Sinon** après paiement : **Activer mon accès** (email ou `mem_…`)\n\n"
             "Si tu as payé via un autre lien : **Activer mon accès**."
         )[:4096],
         "color": EMBED_COLOR,
