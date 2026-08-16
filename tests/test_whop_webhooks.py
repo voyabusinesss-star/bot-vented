@@ -53,7 +53,32 @@ def test_product_plan_map() -> None:
     assert plan_for_product_id("prod_unknown", settings=settings) is None
 
 
-def test_resolve_whop_checkout_url_prefers_plan_over_legacy_store(monkeypatch) -> None:
+def test_resolve_whop_checkout_url_prefers_active_store_over_plan() -> None:
+    settings = SimpleNamespace(
+        whop_plan_starter="plan_starter_live",
+        whop_plan_pro="plan_pro_live",
+        whop_plan_proplus="plan_plus_live",
+        whop_product_starter="prod_starter",
+        whop_product_pro="prod_pro",
+        whop_product_proplus="prod_plus",
+        whop_company_id="biz_test",
+        whop_api_key="",
+        subscriptions_checkout_starter="https://whop.com/resello-7eb1/resello-bf/",
+        subscriptions_checkout_pro="https://whop.com/resello-7eb1/resello-pro-6e/",
+        subscriptions_checkout_proplus="https://whop.com/resello-7eb1/resello-pro-f5/",
+        subscriptions_checkout_url="",
+    )
+    assert (
+        resolve_whop_checkout_url("pro", settings=settings)
+        == "https://whop.com/resello-7eb1/resello-pro-6e/"
+    )
+    assert (
+        resolve_whop_checkout_url("proplus", settings=settings)
+        == "https://whop.com/resello-7eb1/resello-pro-f5/"
+    )
+
+
+def test_resolve_whop_checkout_url_falls_back_to_plan_for_legacy_store() -> None:
     settings = SimpleNamespace(
         whop_plan_starter="plan_starter_live",
         whop_plan_pro="plan_pro_live",
@@ -69,16 +94,8 @@ def test_resolve_whop_checkout_url_prefers_plan_over_legacy_store(monkeypatch) -
         subscriptions_checkout_url="",
     )
     assert (
-        resolve_whop_checkout_url("starter", settings=settings)
-        == "https://whop.com/checkout/plan_starter_live"
-    )
-    assert (
         resolve_whop_checkout_url("pro", settings=settings)
         == "https://whop.com/checkout/plan_pro_live"
-    )
-    assert (
-        resolve_whop_checkout_url("proplus", settings=settings)
-        == "https://whop.com/checkout/plan_plus_live"
     )
 
 

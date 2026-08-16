@@ -178,26 +178,29 @@ def resolve_whop_checkout_url(
     *,
     settings: Settings | None = None,
 ) -> str:
-    """URL checkout Whop canonique pour un tier (WHOP_PLAN → API, pas vieux liens store)."""
+    """URL Whop pour un tier : SUBSCRIPTIONS_CHECKOUT (pages actives) puis plan checkout."""
     s = settings or get_settings()
     tier_n = (tier or "").strip().lower()
-    plan_id = resolve_whop_plan_id(tier_n, settings=s)
-    if plan_id:
-        return f"https://whop.com/checkout/{plan_id}"
 
     configured = _subscriptions_checkout_env(s, tier_n)
     if configured and not _is_legacy_whop_store_url(configured):
         plan_from_url = _plan_id_from_checkout_url(configured)
         if plan_from_url:
             return f"https://whop.com/checkout/{plan_from_url}"
-        if configured.startswith("https://whop.com/") and "/checkout/" in configured:
+        if configured.startswith("https://whop.com/"):
             return configured.rstrip("/") + "/"
+
+    plan_id = resolve_whop_plan_id(tier_n, settings=s)
+    if plan_id:
+        return f"https://whop.com/checkout/{plan_id}"
 
     global_url = str(getattr(s, "subscriptions_checkout_url", "") or "").strip()
     if global_url and not _is_legacy_whop_store_url(global_url):
         plan_from_url = _plan_id_from_checkout_url(global_url)
         if plan_from_url:
             return f"https://whop.com/checkout/{plan_from_url}"
+        if global_url.startswith("https://whop.com/"):
+            return global_url.rstrip("/") + "/"
     return ""
 
 

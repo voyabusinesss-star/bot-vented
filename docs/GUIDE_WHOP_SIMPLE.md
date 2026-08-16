@@ -46,9 +46,9 @@ Si Discord n’est **pas connecté** à ton compte Whop → paiement OK, **rôle
 ### Étape 3 — Rejoindre
 
 1. Ouvre le bon lien :
-   - Starter : https://whop.com/checkout/plan_qugfCEyM1Fj6M
-   - Pro : https://whop.com/checkout/plan_0EEzjWuiq9f5n
-   - Pro+ : https://whop.com/checkout/plan_Rxzu2RlTW4APm
+   - Starter : https://whop.com/resello-7eb1/resello-bf/
+   - Pro : https://whop.com/resello-7eb1/resello-pro-6e/
+   - Pro+ : https://whop.com/resello-7eb1/resello-pro-f5/
 2. Si c’est gratuit (ou code promo) → confirme
 3. Va sur Discord → serveur Resello
 4. Tu dois avoir le rôle **Starter** / **Pro** / **Pro+**
@@ -88,9 +88,9 @@ Envoie à l’assistant (ou fais-le toi) :
 Noms **exactement** comme ça :
 
 ```
-SUBSCRIPTIONS_CHECKOUT_STARTER=https://whop.com/checkout/plan_qugfCEyM1Fj6M
-SUBSCRIPTIONS_CHECKOUT_PRO=https://whop.com/checkout/plan_0EEzjWuiq9f5n
-SUBSCRIPTIONS_CHECKOUT_PROPLUS=https://whop.com/checkout/plan_Rxzu2RlTW4APm
+SUBSCRIPTIONS_CHECKOUT_STARTER=https://whop.com/resello-7eb1/resello-bf/
+SUBSCRIPTIONS_CHECKOUT_PRO=https://whop.com/resello-7eb1/resello-pro-6e/
+SUBSCRIPTIONS_CHECKOUT_PROPLUS=https://whop.com/resello-7eb1/resello-pro-f5/
 WHOP_PLAN_STARTER=plan_qugfCEyM1Fj6M
 WHOP_PLAN_PRO=plan_0EEzjWuiq9f5n
 WHOP_PLAN_PROPLUS=plan_Rxzu2RlTW4APm
