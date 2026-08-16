@@ -160,9 +160,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Chemin vers l'image d'aperçu Vintify (défaut: config/vintify-preview.png)",
     )
-    sub.add_parser(
+    subs_parser = sub.add_parser(
         "post-subscriptions",
         help="Poste les offres Starter/Pro/Pro+ dans DISCORD_CHANNEL_SUBSCRIPTIONS",
+    )
+    subs_parser.add_argument(
+        "--tiers",
+        default="",
+        help="Offres à publier (ex. pro,proplus). Vide = intro + les 3 offres.",
+    )
+    subs_parser.add_argument(
+        "--channel-id",
+        default="",
+        help="ID salon Discord (défaut: DISCORD_CHANNEL_SUBSCRIPTIONS)",
     )
     sub.add_parser(
         "post-fiscalite",
@@ -972,12 +982,15 @@ def cmd_post_vintify_intro(args, log) -> None:
         print(f"OK — intro Vintify postée dans le salon {channel_id}")
 
 
-def cmd_post_subscriptions(log) -> None:
+def cmd_post_subscriptions(log, args=None) -> None:
     from vinted_bot.interactions.discord_api import (
         DiscordInteractionClient,
         sanitize_guild_id,
     )
-    from vinted_bot.interactions.subscriptions_panel import post_subscriptions_messages
+    from vinted_bot.interactions.subscriptions_panel import (
+        post_subscription_tiers,
+        post_subscriptions_messages,
+    )
 
     settings = get_settings()
     if not settings.discord_bot_token.strip():
@@ -985,7 +998,10 @@ def cmd_post_subscriptions(log) -> None:
         return
 
     with DiscordInteractionClient(settings) as client:
-        channel_id = client.subscriptions_channel_id()
+        channel_id = (
+            str(getattr(args, "channel_id", "") or "").strip()
+            or client.subscriptions_channel_id()
+        )
         if not channel_id:
             print(
                 "DISCORD_CHANNEL_SUBSCRIPTIONS manquant dans .env "
@@ -997,16 +1013,29 @@ def cmd_post_subscriptions(log) -> None:
             print("DISCORD_GUILD_ID manquant dans .env")
             return
         webhook_url = getattr(settings, "discord_webhook_subscriptions", "") or ""
-        messages = post_subscriptions_messages(
-            client,
-            channel_id=channel_id,
-            guild_id=guild_id,
-            webhook_url=webhook_url or None,
-        )
+        tiers_raw = str(getattr(args, "tiers", "") or "").strip()
+        if tiers_raw:
+            tiers = tuple(t.strip().lower() for t in tiers_raw.split(",") if t.strip())
+            messages = post_subscription_tiers(
+                client,
+                channel_id=channel_id,
+                guild_id=guild_id,
+                tiers=tiers,
+                webhook_url=webhook_url or None,
+                replace=True,
+            )
+        else:
+            messages = post_subscriptions_messages(
+                client,
+                channel_id=channel_id,
+                guild_id=guild_id,
+                webhook_url=webhook_url or None,
+            )
         log.info(
             "subscriptions_cli_posted",
             channel_id=channel_id,
             count=len(messages),
+            tiers=tiers_raw or "all",
         )
         print(
             f"OK — {len(messages)} messages abonnements postés dans le salon {channel_id}"
@@ -1678,7 +1707,7 @@ def main(argv: list[str] | None = None) -> None:
         cmd_post_vintify_intro(args, log)
         return
     if args.command == "post-subscriptions":
-        cmd_post_subscriptions(log)
+        cmd_post_subscriptions(log, args)
         return
     if args.command == "post-fiscalite":
         cmd_post_fiscalite(log)
