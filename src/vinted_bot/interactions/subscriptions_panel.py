@@ -126,7 +126,7 @@ def build_subscription_embed_payload(
         lines.extend(
             [
                 "",
-                f"🔗 **[Rejoindre sur Whop]({checkout_url})**",
+                f"🔗 [Clique ici pour rejoindre]({checkout_url})",
             ]
         )
     else:
@@ -145,22 +145,7 @@ def build_subscription_embed_payload(
         "image": {"url": f"attachment://{banner_filename}"},
         "footer": {"text": "Resello · Abonnements"},
     }
-    payload: dict[str, Any] = {"embeds": [embed]}
-    if checkout_url:
-        payload["components"] = [
-            {
-                "type": 1,
-                "components": [
-                    {
-                        "type": 2,
-                        "style": 5,
-                        "label": "💳 Rejoindre",
-                        "url": checkout_url,
-                    }
-                ],
-            }
-        ]
-    return payload
+    return {"embeds": [embed]}
 
 
 def build_subscriptions_intro_payload() -> dict[str, Any]:
