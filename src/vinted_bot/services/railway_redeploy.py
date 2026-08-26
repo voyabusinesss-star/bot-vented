@@ -74,7 +74,7 @@ def trigger_service_redeploy(*, reason: str = "403") -> bool:
     import httpx
 
     headers = {
-        "Authorization": f"Bearer {token}",
+        "Project-Access-Token": token,
         "Content-Type": "application/json",
     }
     payload = {
