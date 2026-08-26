@@ -17,6 +17,8 @@ from vinted_bot.db.session import session_scope
 from vinted_bot.notify.discord import (
     DiscordNotifier,
     build_listing_payload,
+    build_listing_preview_payload,
+    pick_diverse_preview_listing,
 )
 from vinted_bot.utils.logging import get_logger
 
@@ -28,6 +30,7 @@ OUTBOX_STATUS_FAILED = "failed"
 OUTBOX_STATUS_SKIPPED = "skipped"
 KIND_BRAND = "brand"
 KIND_ALL = "all"
+KIND_PREVIEW = "preview"
 
 
 def _max_listing_age_minutes() -> int | None:
@@ -222,6 +225,185 @@ def enqueue_listings_for_discord(listings: Sequence[Listing]) -> list[int]:
     return enqueued_listing_ids
 
 
+def _preview_channel_id() -> str | None:
+    settings = get_settings()
+    return sanitize_discord_channel_id(
+        getattr(settings, "discord_channel_bot_preview", "") or ""
+    )
+
+
+def enqueue_bot_preview_from_candidates(
+    candidates: Sequence[Listing],
+    *,
+    settings: Any | None = None,
+) -> bool:
+    """Enqueue 1 aperçu bot (kind=preview) — flush worker poste avec drip."""
+    import time
+
+    from vinted_bot.notify import discord as discord_preview
+
+    cfg = settings or get_settings()
+    if not bool(getattr(cfg, "bot_preview_via_outbox", True)):
+        return False
+    channel_id = _preview_channel_id()
+    if not channel_id:
+        log.info("discord_bot_preview_skipped", reason="channel_not_configured")
+        return False
+    if not candidates:
+        return False
+
+    interval = float(getattr(cfg, "bot_preview_interval_seconds", 150.0) or 150.0)
+    now = time.monotonic()
+    last_at = float(getattr(discord_preview, "_last_bot_preview_post_at", 0.0) or 0.0)
+    if last_at and (now - last_at) < interval:
+        log.info(
+            "discord_bot_preview_skipped",
+            reason="interval",
+            wait_seconds=round(interval - (now - last_at), 1),
+            candidates=len(candidates),
+        )
+        return False
+
+    with session_scope() as session:
+        pending_preview = session.scalar(
+            select(DiscordOutbox.id)
+            .where(DiscordOutbox.kind == KIND_PREVIEW)
+            .where(DiscordOutbox.status == OUTBOX_STATUS_PENDING)
+            .limit(1)
+        )
+        if pending_preview:
+            log.info("discord_bot_preview_skipped", reason="outbox_pending")
+            return False
+
+    listing = pick_diverse_preview_listing(list(candidates))
+    if listing is None:
+        log.info("discord_bot_preview_skipped", reason="no_candidate")
+        return False
+
+    now = _utcnow()
+    published = _as_aware(listing.published_at) or _as_aware(listing.first_seen_at) or now
+    if _is_stale_published_at(published, _max_listing_age_minutes()):
+        log.info(
+            "discord_bot_preview_skipped",
+            reason="stale",
+            vinted_id=listing.vinted_id,
+        )
+        return False
+
+    with session_scope() as session:
+        exists = session.scalar(
+            select(DiscordOutbox.id)
+            .where(DiscordOutbox.listing_id == listing.id)
+            .where(DiscordOutbox.channel_id == channel_id)
+            .where(DiscordOutbox.kind == KIND_PREVIEW)
+            .where(DiscordOutbox.status.in_([OUTBOX_STATUS_PENDING, OUTBOX_STATUS_SENT]))
+            .limit(1)
+        )
+        if exists:
+            log.info("discord_bot_preview_skipped", reason="already_queued")
+            return False
+        session.add(
+            DiscordOutbox(
+                listing_id=listing.id,
+                channel_id=channel_id,
+                published_at=published,
+                enqueued_at=now,
+                status=OUTBOX_STATUS_PENDING,
+                kind=KIND_PREVIEW,
+            )
+        )
+    discord_preview._last_bot_preview_post_at = now
+    brand = discord_preview._preview_brand_key(listing)
+    tag = (
+        f"{'shoe' if discord_preview._preview_is_shoe(listing) else 'cloth'}:{brand}"
+    )
+    discord_preview._recent_preview_brands = (
+        discord_preview._recent_preview_brands + [tag]
+    )[-discord_preview._RECENT_PREVIEW_BRANDS_MAX :]
+    vid = int(getattr(listing, "vinted_id", 0) or 0)
+    if vid:
+        discord_preview._recent_preview_vinted_ids = (
+            discord_preview._recent_preview_vinted_ids + [vid]
+        )[-discord_preview._RECENT_PREVIEW_IDS_MAX :]
+    log.info(
+        "discord_bot_preview_enqueued",
+        listing_id=listing.id,
+        vinted_id=listing.vinted_id,
+        brand=listing.brand,
+        channel_id=channel_id,
+    )
+    return True
+
+
+def requeue_retryable_failed_outbox(
+    *,
+    retry_after_seconds: float = 120.0,
+    limit: int = 50,
+) -> int:
+    """Remet en pending les failed récents (429 Discord transient)."""
+    from datetime import timedelta
+
+    cutoff = _utcnow() - timedelta(seconds=max(30.0, retry_after_seconds))
+    requeued = 0
+    with session_scope() as session:
+        rows = list(
+            session.scalars(
+                select(DiscordOutbox)
+                .where(DiscordOutbox.status == OUTBOX_STATUS_FAILED)
+                .where(DiscordOutbox.enqueued_at >= cutoff)
+                .order_by(DiscordOutbox.enqueued_at.asc())
+                .limit(max(1, int(limit)))
+            ).all()
+        )
+        for row in rows:
+            row.status = OUTBOX_STATUS_PENDING
+            requeued += 1
+    if requeued:
+        log.info("discord_outbox_requeued_failed", count=requeued)
+    return requeued
+
+
+def discord_outbox_stats() -> dict[str, Any]:
+    """Métriques outbox pour heartbeat scrape."""
+    from sqlalchemy import func
+
+    with session_scope() as session:
+        pending = int(
+            session.scalar(
+                select(func.count())
+                .select_from(DiscordOutbox)
+                .where(DiscordOutbox.status == OUTBOX_STATUS_PENDING)
+            )
+            or 0
+        )
+        failed = int(
+            session.scalar(
+                select(func.count())
+                .select_from(DiscordOutbox)
+                .where(DiscordOutbox.status == OUTBOX_STATUS_FAILED)
+            )
+            or 0
+        )
+        oldest_pub = session.scalar(
+            select(DiscordOutbox.published_at)
+            .where(DiscordOutbox.status == OUTBOX_STATUS_PENDING)
+            .order_by(DiscordOutbox.published_at.asc())
+            .limit(1)
+        )
+    lag_seconds: float | None = None
+    if oldest_pub is not None:
+        pub = _as_aware(oldest_pub)
+        if pub is not None:
+            lag_seconds = round((_utcnow() - pub).total_seconds(), 1)
+    stats: dict[str, Any] = {
+        "outbox_pending": pending,
+        "outbox_failed": failed,
+    }
+    if lag_seconds is not None:
+        stats["outbox_lag_seconds"] = lag_seconds
+    return stats
+
+
 def flush_discord_outbox(
     *,
     buffer_seconds: float = 0.0,
@@ -314,7 +496,10 @@ def flush_discord_outbox(
                 row.status = OUTBOX_STATUS_FAILED
                 continue
             if listing.id not in built_payloads:
-                built_payloads[listing.id] = build_listing_payload(listing)
+                if row.kind == KIND_PREVIEW:
+                    built_payloads[listing.id] = build_listing_preview_payload(listing)
+                else:
+                    built_payloads[listing.id] = build_listing_payload(listing)
             payload_jobs.append(
                 (
                     int(row.id),
@@ -366,6 +551,14 @@ def flush_discord_outbox(
                     brand=brand,
                     published_at=published_at,
                 )
+                if kind == KIND_PREVIEW:
+                    log.info(
+                        "discord_bot_preview_posted",
+                        outbox_id=row_id,
+                        vinted_id=vinted_id,
+                        channel_id=channel_id,
+                        brand=brand,
+                    )
             except Exception as exc:  # noqa: BLE001
                 failed_row_ids.append(row_id)
                 log.warning(
@@ -438,7 +631,15 @@ class DiscordFlushWorker(threading.Thread):
             purge_stale_discord_outbox()
         except Exception as exc:  # noqa: BLE001
             log.warning("discord_outbox_purge_failed", error=str(exc)[:200])
+        requeue_tick = 0
         while not self._stop.is_set():
+            requeue_tick += 1
+            if requeue_tick >= 30:
+                requeue_tick = 0
+                try:
+                    requeue_retryable_failed_outbox()
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("discord_outbox_requeue_failed", error=str(exc)[:200])
             try:
                 flush_discord_outbox(
                     buffer_seconds=self.buffer_seconds,

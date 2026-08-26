@@ -5,10 +5,10 @@ from __future__ import annotations
 import base64
 import re
 from functools import lru_cache
-from typing import Self
+from typing import Annotated, Self
 
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Clé marque normalisée (espaces) → champ Settings / env DISCORD_CHANNEL_*
 # Correspond aux salons Discord (les-classiques / indémodables + luxe-revente).
@@ -178,11 +178,14 @@ class Settings(BaseSettings):
     scrape_filter_worker_enabled: bool = False
     # Alerte Discord (#logs) si aucun heartbeat scrape depuis N secondes
     scrape_silence_alert_seconds: float = Field(default=120.0, ge=30.0)
-    # Pause minimale entre deux recherches du même worker (quasi temps réel)
-    scrape_poll_seconds_min: float = Field(default=0.05, ge=0.05)
-    scrape_poll_seconds_max: float = Field(default=0.15, ge=0.05)
+    # Pause minimale entre deux recherches du même worker (Railway : 8–12 s)
+    scrape_poll_seconds_min: float = Field(default=8.0, ge=0.05)
+    scrape_poll_seconds_max: float = Field(default=12.0, ge=0.05)
+    # Mode rafales (0 = boucle 24/7) — ex. ON 300 s / OFF 600 s pour économiser proxy
+    scrape_burst_on_seconds: float = Field(default=0.0, ge=0.0)
+    scrape_burst_off_seconds: float = Field(default=0.0, ge=0.0)
     # Proxies HTTP/SOCKS (CSV ou lignes) — 1 sticky par worker, rotation au recycle
-    scrape_proxy_urls: list[str] = Field(default_factory=list)
+    scrape_proxy_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     @field_validator("scrape_proxy_urls", mode="before")
     @classmethod
@@ -367,7 +370,11 @@ class Settings(BaseSettings):
     # Max matches mis en file par passage scrape (le worker envoie ensuite)
     private_filter_max_dm_per_scrape: int = Field(default=50, ge=1, le=200)
     # Intervalle scrape filtres privés (secondes) — boucle continue
-    private_filter_scrape_interval_seconds: float = Field(default=5.0, ge=3.0)
+    private_filter_scrape_interval_seconds: float = Field(default=30.0, ge=3.0)
+    # Outbox Discord — drip anti-429
+    discord_outbox_max_messages: int = Field(default=8, ge=1, le=50)
+    discord_outbox_flush_poll_seconds: float = Field(default=0.6, ge=0.15)
+    bot_preview_via_outbox: bool = True
     # Portail liaison Vinted (URL publique HTTPS, ex. ngrok)
     vinted_link_public_url: str = ""
     vinted_link_server_host: str = "0.0.0.0"

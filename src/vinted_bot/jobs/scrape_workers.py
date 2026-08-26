@@ -11,7 +11,11 @@ import threading
 import time
 from typing import Sequence
 
-from vinted_bot.clients.vinted_browser import VintedBrowser
+from vinted_bot.clients.vinted_browser import (
+    CatalogFetchBlockedError,
+    VintedBrowser,
+    catalog_error_backoff_seconds,
+)
 from vinted_bot.config import get_settings
 from vinted_bot.config_loader import (
     PRIORITY_RANK,
@@ -21,7 +25,7 @@ from vinted_bot.config_loader import (
     resolve_policy,
     target_poll_interval_seconds,
 )
-from vinted_bot.jobs.discord_outbox import DiscordFlushWorker
+from vinted_bot.jobs.discord_outbox import DiscordFlushWorker, discord_outbox_stats
 from vinted_bot.services.filter_scrape_targets import active_filter_search_targets
 from vinted_bot.services.scrape_heartbeat import (
     read_scrape_heartbeat,
@@ -294,12 +298,16 @@ class BrandWorker:
         self._last_scrape_at: dict[tuple[str, str, tuple[int, ...]], float] = {}
         self._revisit_samples: list[float] = []
         self._last_activity = time.monotonic()
+        self._backoff_until = 0.0
         self._next_filter_inject_at = 0.0
         # Worker 0 only injects filters (évite N scrapes filtres si multi-workers)
         self._inject_filters = worker_id == 0
 
     def last_activity_age(self) -> float:
         return max(0.0, time.monotonic() - self._last_activity)
+
+    def is_in_backoff(self) -> bool:
+        return time.monotonic() < self._backoff_until
 
     def _touch(self) -> None:
         self._last_activity = time.monotonic()
@@ -327,15 +335,61 @@ class BrandWorker:
         if self._browser is None:
             return
         try:
-            # force_stop : évite de bloquer 55s+ si Playwright est coincé
-            force = getattr(self._browser, "force_stop", None)
-            if callable(force):
-                force()
-            else:
-                self._browser.stop()
+            # stop() propre > force_stop (évite fuites threads Playwright).
+            self._browser.stop()
         except Exception:  # noqa: BLE001
-            pass
+            try:
+                force = getattr(self._browser, "force_stop", None)
+                if callable(force):
+                    force()
+            except Exception:  # noqa: BLE001
+                pass
         self._browser = None
+
+    def _recovery_sleep(self, exc: BaseException, *, default: float) -> None:
+        extra = catalog_error_backoff_seconds(exc)
+        delay = max(float(default), extra)
+        if delay > default:
+            log.warning(
+                "brand_worker_recovery_backoff",
+                worker_id=self.worker_id,
+                delay_seconds=round(delay, 1),
+                error=str(exc)[:120],
+            )
+        self._backoff_until = time.monotonic() + delay
+        remaining = delay
+        while remaining > 0 and not self._stop.is_set():
+            chunk = min(remaining, 30.0)
+            time.sleep(chunk)
+            remaining -= chunk
+            self._touch()
+        self._backoff_until = 0.0
+
+    def _burst_sleep_if_off(self) -> None:
+        """Pause planifiée entre rafales (SCRAPE_BURST_ON/OFF_SECONDS)."""
+        settings = get_settings()
+        on_s = float(getattr(settings, "scrape_burst_on_seconds", 0.0) or 0.0)
+        off_s = float(getattr(settings, "scrape_burst_off_seconds", 0.0) or 0.0)
+        if on_s <= 0 or off_s <= 0:
+            return
+        period = on_s + off_s
+        pos = time.monotonic() % period
+        if pos < on_s:
+            return
+        wait = period - pos
+        log.info(
+            "brand_worker_burst_off",
+            worker_id=self.worker_id,
+            sleep_seconds=round(wait, 1),
+        )
+        self._backoff_until = time.monotonic() + wait
+        remaining = wait
+        while remaining > 0 and not self._stop.is_set():
+            chunk = min(remaining, 30.0)
+            time.sleep(chunk)
+            remaining -= chunk
+            self._touch()
+        self._backoff_until = 0.0
 
     def _browser_is_usable(self, browser: VintedBrowser | None = None) -> bool:
         candidate = browser if browser is not None else self._browser
@@ -355,7 +409,18 @@ class BrandWorker:
                 delay_seconds=settings.request_delay_seconds,
                 proxy_url=self.proxy_url,
             )
-            self._browser.start()
+            try:
+                self._browser.start()
+            except RuntimeError as exc:
+                self._browser = None
+                if "can't start new thread" in str(exc).lower():
+                    log.error(
+                        "brand_worker_thread_limit",
+                        worker_id=self.worker_id,
+                        error=str(exc)[:160],
+                    )
+                    time.sleep(120.0)
+                raise
             try:
                 self._browser.warm_up()
             except Exception as exc:  # noqa: BLE001
@@ -500,6 +565,7 @@ class BrandWorker:
             brands=len(self.targets),
         )
         while not self._stop.is_set():
+            self._burst_sleep_if_off()
             self._cycle += 1
             self._touch()
             cycle_posted = 0
@@ -574,14 +640,22 @@ class BrandWorker:
                         brand=target.brand,
                         error=str(exc)[:200],
                     )
-                    crashed = "crashed" in str(exc).lower() or "Target closed" in str(exc)
-                    self._close_browser()
-                    # Crash renderer : restart immédiat ; autre erreur : petite pause
-                    if not crashed:
-                        time.sleep(self.reconnect_delay)
+                    if (
+                        isinstance(exc, CatalogFetchBlockedError)
+                        and exc.proxy_exhausted
+                        and self.all_proxies
+                    ):
+                        self._recycle_browser(rotate=True)
                     else:
-                        time.sleep(min(2.0, self.reconnect_delay))
-                    browser = self._ensure_browser()
+                        self._close_browser()
+                    self._recovery_sleep(
+                        exc,
+                        default=min(2.0, self.reconnect_delay),
+                    )
+                    try:
+                        browser = self._ensure_browser()
+                    except RuntimeError:
+                        continue
                     self._touch()
 
                 interval = target_poll_interval_seconds(target)
@@ -597,22 +671,12 @@ class BrandWorker:
                         error=str(exc)[:160],
                     )
                     self._close_browser()
-                    time.sleep(min(2.0, self.reconnect_delay))
-                    self._ensure_browser()
-                    self._touch()
-                    # Retry immédiat une fois (sinon les filtres restent muets jusqu'au prochain interval)
+                    self._recovery_sleep(exc, default=min(5.0, self.reconnect_delay))
                     try:
-                        self._next_filter_inject_at = 0.0
-                        self._inject_filter_targets()
-                    except Exception as exc2:  # noqa: BLE001
-                        log.warning(
-                            "brand_worker_filter_inject_cycle_retry_failed",
-                            worker_id=self.worker_id,
-                            error=str(exc2)[:160],
-                        )
-                        self._close_browser()
                         self._ensure_browser()
-                        self._touch()
+                    except RuntimeError:
+                        pass
+                    self._touch()
 
                 if self._successes >= self.restart_every:
                     self._recycle_browser(rotate=True)
@@ -632,6 +696,7 @@ class BrandWorker:
                     skipped_deal=cycle_skipped,
                     brands=len(self.targets),
                     brand_names=[target.brand],
+                    **discord_outbox_stats(),
                 )
             except Exception as exc:  # noqa: BLE001
                 log.exception(
@@ -646,7 +711,7 @@ class BrandWorker:
                     error=str(exc)[:200],
                 )
                 self._close_browser()
-                time.sleep(self.reconnect_delay)
+                self._recovery_sleep(exc, default=self.reconnect_delay)
 
         self._close_browser()
         log.info("brand_worker_stopped", worker_id=self.worker_id)
@@ -845,9 +910,9 @@ def run_permanent_scrape_pool(
         brand_workers.append(w)
 
     flush_worker = DiscordFlushWorker(
-        poll_seconds=0.4,
-        buffer_seconds=0.2,
-        max_messages=5,
+        poll_seconds=float(settings.discord_outbox_flush_poll_seconds),
+        buffer_seconds=0.3,
+        max_messages=int(settings.discord_outbox_max_messages),
     )
     flush_worker.start()
 
@@ -881,10 +946,11 @@ def run_permanent_scrape_pool(
         while True:
             time.sleep(20.0)
             _check_scrape_silence(silence_after=silence_after)
-            # Au-dessus du pire cas catalog (CALL_TIMEOUT ~55s × 2 retries + marge).
-            # Un seuil trop bas tue le worker EN PLEIN scrape → spiral Chromium/OOM.
-            stuck_after = 200.0
+            # Au-dessus du backoff proxy (600 s) + marge catalog (~55 s × retries).
+            stuck_after = 900.0
             for idx, w in enumerate(list(brand_workers)):
+                if w.is_alive() and w.is_in_backoff():
+                    continue
                 stuck = w.is_alive() and w.last_activity_age() > stuck_after
                 if w.is_alive() and not stuck:
                     continue

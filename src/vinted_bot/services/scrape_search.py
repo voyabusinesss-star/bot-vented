@@ -444,18 +444,12 @@ def scrape_search_once(
             # flush marque déjà discord_posted_at pour kind=brand
     posted = len(posted_ids)
 
-    # Salon aperçu bot : 1 ping ralenti depuis le scrape PUBLIC seulement
-    # (jamais les filtres privés / keep_search_text).
+    # Salon aperçu bot : 1 ping ralenti via outbox (même flush worker que marques).
     if not keep_search_text:
         try:
-            from vinted_bot.notify.discord import (
-                DiscordNotifier,
-                maybe_post_bot_preview_from_candidates,
-            )
+            from vinted_bot.jobs.discord_outbox import enqueue_bot_preview_from_candidates
 
             candidates: list[Any] = list(announce)
-            # Enrichit avec d'autres deals du scrape pour diversifier marques /
-            # textile vs chaussures (pas seulement adidas/jordan sneakers).
             sample_ids = list(
                 dict.fromkeys([*created_vinted_ids, *all_vinted_ids])
             )[:30]
@@ -493,10 +487,7 @@ def scrape_search_once(
                         seen.add(vid)
 
             if candidates:
-                with DiscordNotifier(settings) as notifier:
-                    maybe_post_bot_preview_from_candidates(
-                        notifier, candidates, settings=settings
-                    )
+                enqueue_bot_preview_from_candidates(candidates, settings=settings)
         except Exception as exc:  # noqa: BLE001
             log.warning("bot_preview_hook_failed", error=str(exc)[:200])
 

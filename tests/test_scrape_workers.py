@@ -66,6 +66,11 @@ def test_parse_proxy_url_list_csv_and_newlines() -> None:
     ]
 
 
+def test_parse_proxy_url_list_json_array_railway() -> None:
+    raw = '["http://user:pass@p.webshare.io:80"]'
+    assert parse_proxy_url_list(raw) == ["http://user:pass@p.webshare.io:80"]
+
+
 def test_playwright_proxy_from_url_with_auth() -> None:
     d = playwright_proxy_from_url("http://user:p%40ss@1.2.3.4:8080")
     assert d["server"] == "http://1.2.3.4:8080"
@@ -88,6 +93,22 @@ def test_filter_inject_batch_size_caps_load() -> None:
     assert _filter_inject_batch_size(1) == 1
     assert _filter_inject_batch_size(8) == 2
     assert _filter_inject_batch_size(20) == 3
+
+
+def test_brand_worker_backoff_flag() -> None:
+    from vinted_bot.jobs.scrape_workers import BrandWorker
+
+    worker = BrandWorker(
+        worker_id=0,
+        targets=[],
+        proxy_url=None,
+        all_proxies=[],
+        headless=True,
+    )
+    worker._backoff_until = __import__("time").monotonic() + 60.0
+    assert worker.is_in_backoff() is True
+    worker._backoff_until = 0.0
+    assert worker.is_in_backoff() is False
 
 
 def test_brand_worker_recreates_dead_browser() -> None:

@@ -24,6 +24,56 @@ DEFAULT_BASE_URL = "https://www.vinted.fr"
 _CALL_TIMEOUT_S = 55.0
 
 
+class CatalogFetchBlockedError(RuntimeError):
+    """Catalogue Vinted inaccessible (403/402 proxy, rate-limit, quota)."""
+
+    def __init__(
+        self,
+        *,
+        status: int,
+        reason: str,
+        proxy_exhausted: bool = False,
+    ) -> None:
+        self.status = status
+        self.reason = reason
+        self.proxy_exhausted = proxy_exhausted
+        super().__init__(f"catalog blocked ({status}): {reason}")
+
+
+def catalog_error_backoff_seconds(exc: BaseException) -> float:
+    """Pause worker avant retry — évite spirales force_stop / threads."""
+    if isinstance(exc, CatalogFetchBlockedError):
+        return 600.0 if exc.proxy_exhausted else 120.0
+    msg = str(exc).lower()
+    if "bandwidth limit" in msg or "err_tunnel_connection_failed" in msg:
+        return 600.0
+    if "can't start new thread" in msg:
+        return 120.0
+    if "403" in msg or "429" in msg or "rate_limit" in msg:
+        return 90.0
+    return 0.0
+
+
+def _catalog_response_blocked(status: int, body: str) -> tuple[bool, bool, float]:
+    """(blocked, proxy_exhausted, penalty_seconds)."""
+    body_lower = (body or "").lower()
+    proxy_exhausted = status == 402 or "bandwidth limit" in body_lower
+    blocked = (
+        proxy_exhausted
+        or status in {403, 429}
+        or "rate_limit" in body_lower
+    )
+    if not blocked:
+        return False, False, 0.0
+    if proxy_exhausted:
+        penalty = 600.0
+    elif status == 429:
+        penalty = 45.0
+    else:
+        penalty = 90.0
+    return blocked, proxy_exhausted, penalty
+
+
 def build_catalog_params(
     query: str,
     *,
@@ -80,6 +130,7 @@ class VintedBrowser:
         self.proxy_url = (proxy_url or "").strip() or None
         self.rate_limiter = RateLimiter(delay_seconds)
         self._last_catalog_http_blocked = False
+        self._proxy_bandwidth_exhausted = False
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
@@ -103,11 +154,11 @@ class VintedBrowser:
         if self._thread is not None and threading.current_thread() is self._thread:
             return getattr(self, name)(*args, **kwargs)
         if self._thread is None or not self._thread.is_alive():
-            # Après force_stop / crash : revive avant retry scrape (sinon spiral
-            # « VintedBrowser non démarré » sur marques publiques + filtres).
+            # Après force_stop / crash : nettoyer puis relancer (évite fuites threads).
             if name == "_start_impl":
                 raise RuntimeError("VintedBrowser non démarré — appeler start()")
             log.warning("browser_auto_restart", call=name)
+            self._cleanup_dead_thread()
             self.start()
         reply: queue.Queue[Any] = queue.Queue(maxsize=1)
         self._cmd_q.put((name, args, kwargs, reply))
@@ -122,15 +173,36 @@ class VintedBrowser:
             raise payload
         return payload
 
+    def _cleanup_dead_thread(self) -> None:
+        """Repose file + refs après force_stop ou thread mort."""
+        thread = self._thread
+        if thread is None:
+            return
+        if thread.is_alive():
+            return
+        self._thread = None
+        self._page = None
+        self._context = None
+        self._browser = None
+        self._playwright = None
+        self._cmd_q = queue.Queue()
+
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
+        self._cleanup_dead_thread()
         self._thread = threading.Thread(
             target=self._worker,
             name="playwright-vinted",
             daemon=True,
         )
-        self._thread.start()
+        try:
+            self._thread.start()
+        except RuntimeError as exc:
+            self._thread = None
+            if "can't start new thread" in str(exc).lower():
+                log.error("browser_thread_limit", error=str(exc))
+            raise
         self._call("_start_impl")
 
     def stop(self) -> None:
@@ -205,8 +277,11 @@ class VintedBrowser:
             try:
                 proxy_dict = playwright_proxy_from_url(self.proxy_url)
             except ValueError as exc:
-                log.warning("browser_proxy_invalid", error=str(exc), url=self.proxy_url)
-                proxy_dict = None
+                log.error("browser_proxy_invalid", error=str(exc), url=self.proxy_url)
+                raise RuntimeError(
+                    f"SCRAPE_PROXY_URLS invalide ({exc}) — "
+                    "format attendu: http://user:pass@host:port (sans crochets JSON)"
+                ) from exc
 
         self._playwright = sync_playwright().start()
         self._browser = launch_vinted_browser(
@@ -358,62 +433,50 @@ class VintedBrowser:
         if payload is not None:
             return payload
 
-        search_url = f"{self.base_url}/catalog?{urlencode(params)}"
-        log.warning("catalog_fetch_fallback_navigate", url=search_url)
-        catalog_payload: dict[str, Any] | None = None
-
-        def _on_response(response: Any) -> None:
-            nonlocal catalog_payload
-            if "/api/v2/catalog/items" not in response.url:
-                return
-            if response.status != 200:
-                return
-            try:
-                data = response.json()
-            except Exception:
-                return
-            if isinstance(data, dict) and (
-                "items" in data or "catalog_items" in data
-            ):
-                catalog_payload = data
-
-        self.page.on("response", _on_response)
-        try:
-            self.page.goto(search_url, wait_until="commit", timeout=min(self.timeout_ms, 45_000))
-            try:
-                self.page.wait_for_timeout(1500)
-            except Exception:  # noqa: BLE001
-                pass
-            if catalog_payload is None:
-                catalog_payload = self._fetch_catalog_via_page(params)
-        finally:
-            self.page.remove_listener("response", _on_response)
-
-        if catalog_payload is None:
-            raise RuntimeError(
-                "Impossible de récupérer /api/v2/catalog/items "
-                "(page bloquée ou structure changée)"
+        if self._last_catalog_http_blocked:
+            reason = (
+                "proxy_bandwidth_exhausted"
+                if self._proxy_bandwidth_exhausted
+                else "http_blocked"
             )
-        return catalog_payload
+            status = 402 if self._proxy_bandwidth_exhausted else 403
+            raise CatalogFetchBlockedError(
+                status=status,
+                reason=reason,
+                proxy_exhausted=self._proxy_bandwidth_exhausted,
+            )
+
+        # Pas de page.goto fallback — trop de bande passante proxy + timeouts Playwright.
+        raise RuntimeError(
+            "Impossible de récupérer /api/v2/catalog/items "
+            "(API request only — pas de fallback navigateur)"
+        )
 
     def _fetch_catalog_via_page(
         self, params: list[tuple[str, str]]
     ) -> dict[str, Any] | None:
         api_url = f"{self.base_url}/api/v2/catalog/items?{urlencode(params)}"
         # Prefer APIRequestContext: same cookies as the page, but no renderer.
-        # page.evaluate(fetch) is the main "Target crashed" source on Railway RAM.
-        self._last_catalog_http_blocked = False
+        # Ne pas reset le flag blocked ici — sinon retry/navigate ignore le backoff 403.
         result = self._fetch_catalog_via_request(api_url)
         if result is not None:
+            self._last_catalog_http_blocked = False
+            self._proxy_bandwidth_exhausted = False
             return result
         # 403/429 : ne pas retomber sur evaluate (crash Chromium + spiral force_stop)
         if getattr(self, "_last_catalog_http_blocked", False):
             log.warning(
                 "catalog_skip_evaluate_after_block",
-                reason="http_403_or_429",
+                reason=(
+                    "proxy_bandwidth_exhausted"
+                    if getattr(self, "_proxy_bandwidth_exhausted", False)
+                    else "http_403_or_429"
+                ),
             )
             return None
-        return self._fetch_catalog_via_evaluate(api_url)
+        # evaluate(fetch) = crash Chromium + gros bandwidth — API request only.
+        log.warning("catalog_skip_evaluate", reason="request_only_mode")
+        return None
 
     def _fetch_catalog_via_request(self, api_url: str) -> dict[str, Any] | None:
         if self._context is None:
@@ -436,14 +499,16 @@ class VintedBrowser:
                 except Exception:  # noqa: BLE001
                     pass
                 log.warning("catalog_fetch_failed", status=status, body=body, via="request")
-                if status in {429, 403} or "rate_limit" in body.lower():
+                blocked, proxy_exhausted, penalty = _catalog_response_blocked(status, body)
+                if blocked:
                     self._last_catalog_http_blocked = True
-                    penalty = 45.0 if status == 429 else 90.0
+                    self._proxy_bandwidth_exhausted = proxy_exhausted
                     self.rate_limiter.penalize(penalty)
                     log.warning(
                         "catalog_rate_limit_backoff",
                         status=status,
                         penalty_seconds=penalty,
+                        proxy_exhausted=proxy_exhausted,
                     )
                 return None
             data = response.json()

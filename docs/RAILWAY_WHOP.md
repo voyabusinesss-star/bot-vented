@@ -69,11 +69,17 @@ Copier depuis ton `.env` local **toutes** les `DISCORD_CHANNEL_*` (marques, snea
 ```env
 VINTED_BASE_URL=https://www.vinted.fr
 SCRAPE_HEADLESS=true
-REQUEST_DELAY_SECONDS=0.8
+REQUEST_DELAY_SECONDS=2
 MAX_RETRIES=3
 ENABLE_SCRAPE=1
-PRIVATE_FILTER_SCRAPE_INTERVAL_SECONDS=8
+PRIVATE_FILTER_SCRAPE_INTERVAL_SECONDS=45
+SCRAPE_POLL_SECONDS_MIN=10
+SCRAPE_POLL_SECONDS_MAX=15
+# Proxy Sticky FR Webshare — URL simple (pas de JSON avec crochets)
+# SCRAPE_PROXY_URLS=http://USER:PASS@p.webshare.io:80
 ```
+
+Voir **`docs/SCRAPE_DEPLOYMENT.md`** pour Mac local vs Railway vs upgrade Webshare.
 
 Astuce Railway : **Variables** → Raw Editor → colle le bloc `DISCORD_CHANNEL_*` de ton `.env`.
 
@@ -114,7 +120,7 @@ Logs Railway attendus :
 | Webhook | cloudflared (URL change) | URL fixe |
 | Port | `WHOP_WEBHOOK_PORT=8788` | `PORT` (auto) |
 | DB | docker compose | plugin Postgres |
-| Scrape | `scrape --loop` | non (hors scope) |
+| Scrape | `scrape --loop` local (IP box) | `bot-scrape` + proxy Sticky FR |
 
 ## Dépannage
 

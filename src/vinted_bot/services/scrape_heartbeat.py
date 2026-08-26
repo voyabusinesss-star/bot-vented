@@ -45,4 +45,11 @@ def scrape_health_line() -> str:
         age = -1
     posted = data.get("posted")
     cycle = data.get("cycle")
-    return f"scrape=ok age_s={age} cycle={cycle} posted={posted}"
+    outbox_pending = data.get("outbox_pending")
+    outbox_lag = data.get("outbox_lag_seconds")
+    extra = ""
+    if outbox_pending is not None:
+        extra += f" outbox_pending={outbox_pending}"
+    if outbox_lag is not None:
+        extra += f" outbox_lag_s={outbox_lag}"
+    return f"scrape=ok age_s={age} cycle={cycle} posted={posted}{extra}"

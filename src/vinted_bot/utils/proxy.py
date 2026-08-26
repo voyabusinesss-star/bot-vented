@@ -2,22 +2,46 @@
 
 from __future__ import annotations
 
+import json
 import re
-from typing import Any
 from urllib.parse import unquote, urlparse
 
 
+def _strip_wrapping_quotes(text: str) -> str:
+    return text.strip().strip('"').strip("'")
+
+
 def parse_proxy_url_list(raw: object) -> list[str]:
-    """Accepte str CSV/newline, list, ou vide → liste d'URLs non vides."""
+    """Accepte str CSV/newline, JSON array Railway, list, ou vide."""
     if raw is None:
         return []
     if isinstance(raw, (list, tuple)):
-        return [str(x).strip() for x in raw if str(x).strip()]
-    text = str(raw).strip()
+        out: list[str] = []
+        for item in raw:
+            out.extend(parse_proxy_url_list(item))
+        return out
+    text = _strip_wrapping_quotes(str(raw))
     if not text:
         return []
+    if text.startswith("["):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return parse_proxy_url_list(parsed)
+        except json.JSONDecodeError:
+            inner = text[1:-1].strip() if text.endswith("]") else text[1:]
+            inner = _strip_wrapping_quotes(inner)
+            if inner.startswith("http"):
+                return [inner]
     parts = re.split(r"[\n,]+", text)
-    return [p.strip() for p in parts if p.strip()]
+    out: list[str] = []
+    for part in parts:
+        cleaned = _strip_wrapping_quotes(part)
+        if cleaned.startswith("[") and cleaned.endswith("]"):
+            cleaned = _strip_wrapping_quotes(cleaned[1:-1])
+        if cleaned:
+            out.append(cleaned)
+    return out
 
 
 def playwright_proxy_from_url(url: str) -> dict[str, str]:

@@ -11,25 +11,25 @@
 # Par défaut catalog_ids = [4, 5] (vêtements F/H) → pas de chaussures.
 
 priorities:
-  # 1 Chromium : high plus souvent, medium/low ne bloquent pas la fraîcheur
+  # Railway 1 Go proxy : cadence lente (voir SCRAPE_POLL_SECONDS_* en env)
   high:
     every_n_cycles: 1
     extra_passes: 0
-    max_items: 16
-    max_discord_posts: 8
-    poll_interval_seconds: 0.5
-  medium:
-    every_n_cycles: 1
-    extra_passes: 0
     max_items: 12
-    max_discord_posts: 5
-    poll_interval_seconds: 2.0
-  low:
-    every_n_cycles: 1
+    max_discord_posts: 6
+    poll_interval_seconds: 8.0
+  medium:
+    every_n_cycles: 2
     extra_passes: 0
     max_items: 10
-    max_discord_posts: 3
-    poll_interval_seconds: 5.0
+    max_discord_posts: 4
+    poll_interval_seconds: 15.0
+  low:
+    every_n_cycles: 3
+    extra_passes: 0
+    max_items: 8
+    max_discord_posts: 2
+    poll_interval_seconds: 25.0
 
 searches:
   # --- Priorité élevée (forte concurrence) ---
@@ -104,22 +104,22 @@ searches:
     query: dickies
     brand_ids: [65]
     priority: medium
-    enabled: true
+    enabled: false
   - brand: under armour
     query: under armour
     brand_ids: [52035]
     priority: medium
-    enabled: true
+    enabled: false
   - brand: supreme
     query: supreme
     brand_ids: [14969]
     priority: medium
-    enabled: true
+    enabled: false
   - brand: levis
     query: levis
     brand_ids: [10]
     priority: medium
-    enabled: true
+    enabled: false
   - brand: ami paris
     query: ami paris
     # Ami Paris + AMI — vêtements F/H explicites
@@ -136,7 +136,7 @@ searches:
     query: columbia
     brand_ids: [17161]
     priority: medium
-    enabled: true
+    enabled: false
 
   # --- Luxe revente (forte valeur) ---
   - brand: moncler
