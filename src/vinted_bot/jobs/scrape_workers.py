@@ -34,6 +34,11 @@ from vinted_bot.services.scrape_heartbeat import (
     write_scrape_heartbeat,
 )
 from vinted_bot.services.scrape_search import ScrapeActivitySignal, scrape_search_once
+from vinted_bot.services.scrape_brand_diagnostics import (
+    record_scrape_error,
+    record_scrape_start,
+    record_scrape_success,
+)
 from vinted_bot.utils.logging import get_logger
 from vinted_bot.utils.proxy import assign_proxy_for_worker, rotate_proxy
 
@@ -200,6 +205,13 @@ class ScrapeTargetOutcome:
     activity: ScrapeActivitySignal | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class DueTargetPick:
+    target: SearchTarget
+    forced_by_ceiling: bool = False
+    starving_count: int = 0
+
+
 def _activity_hotness(
     activity: TargetActivity | None,
     *,
@@ -247,20 +259,98 @@ def _adaptive_poll_interval(
     return base
 
 
+def _seconds_since_last_scrape(
+    key: tuple[str, str, tuple[int, ...]],
+    last_scrape_at: dict[tuple[str, str, tuple[int, ...]], float],
+    *,
+    now: float,
+) -> float | None:
+    last = last_scrape_at.get(key)
+    if last is None:
+        return None
+    return max(0.0, now - last)
+
+
+def _is_starving_for_revisit(
+    key: tuple[str, str, tuple[int, ...]],
+    last_scrape_at: dict[tuple[str, str, tuple[int, ...]], float],
+    *,
+    now: float,
+    max_revisit_seconds: float,
+) -> bool:
+    if max_revisit_seconds <= 0:
+        return False
+    last = last_scrape_at.get(key)
+    if last is None:
+        return True
+    return (now - last) >= max_revisit_seconds
+
+
+def _count_actionable_targets(
+    targets: Sequence[SearchTarget],
+    next_run: dict[tuple[str, str, tuple[int, ...]], float],
+    *,
+    now: float,
+    last_scrape_at: dict[tuple[str, str, tuple[int, ...]], float] | None = None,
+    max_revisit_seconds: float = 0.0,
+) -> int:
+    scrape_at = last_scrape_at or {}
+    count = 0
+    for target in targets:
+        key = _target_key(target)
+        if next_run.get(key, 0.0) <= now:
+            count += 1
+        elif _is_starving_for_revisit(
+            key,
+            scrape_at,
+            now=now,
+            max_revisit_seconds=max_revisit_seconds,
+        ):
+            count += 1
+    return count
+
+
 def _pick_due_target(
     targets: Sequence[SearchTarget],
     next_run: dict[tuple[str, str, tuple[int, ...]], float],
     *,
     now: float,
     activity: dict[tuple[str, str, tuple[int, ...]], TargetActivity] | None = None,
-) -> SearchTarget | None:
+    last_scrape_at: dict[tuple[str, str, tuple[int, ...]], float] | None = None,
+    max_revisit_seconds: float = 0.0,
+) -> DueTargetPick | None:
     due: list[tuple[float, SearchTarget]] = []
     for target in targets:
         key = _target_key(target)
         when = next_run.get(key, 0.0)
         if when <= now:
             due.append((when, target))
-    if not due:
+
+    scrape_at = last_scrape_at or {}
+    starving_targets = [
+        target
+        for target in targets
+        if _is_starving_for_revisit(
+            _target_key(target),
+            scrape_at,
+            now=now,
+            max_revisit_seconds=max_revisit_seconds,
+        )
+    ]
+    if starving_targets:
+        pool = [
+            (
+                _seconds_since_last_scrape(_target_key(target), scrape_at, now=now)
+                or 999_999.0,
+                target,
+            )
+            for target in starving_targets
+        ]
+        forced_by_ceiling = True
+    elif due:
+        pool = due
+        forced_by_ceiling = False
+    else:
         return None
     weight = {"high": 2.5, "medium": 1.15, "low": 0.7}
     act_map = activity or {}
@@ -272,14 +362,28 @@ def _pick_due_target(
         hot = _activity_hotness(act_map.get(_target_key(target)), now=now)
         return overdue * pri + hot
 
-    due.sort(
-        key=lambda item: (
-            -_score(item),
-            PRIORITY_RANK.get(item[1].priority, 9),
-            hash(_target_key(item[1])) & 0xFFFF,
+    if forced_by_ceiling:
+        pool.sort(
+            key=lambda item: (
+                -item[0],
+                -_activity_hotness(act_map.get(_target_key(item[1])), now=now),
+                random.random(),
+            )
         )
+    else:
+        pool.sort(
+            key=lambda item: (
+                -_score(item),
+                PRIORITY_RANK.get(item[1].priority, 9),
+                hash(_target_key(item[1])) & 0xFFFF,
+            )
+        )
+    chosen = pool[0][1]
+    return DueTargetPick(
+        target=chosen,
+        forced_by_ceiling=forced_by_ceiling,
+        starving_count=len(starving_targets),
     )
-    return due[0][1]
 
 
 def _seconds_until_next(
@@ -287,8 +391,20 @@ def _seconds_until_next(
     next_run: dict[tuple[str, str, tuple[int, ...]], float],
     *,
     now: float,
+    last_scrape_at: dict[tuple[str, str, tuple[int, ...]], float] | None = None,
+    max_revisit_seconds: float = 0.0,
 ) -> float:
-    waits = [next_run.get(_target_key(t), now) - now for t in targets]
+    waits: list[float] = []
+    scrape_at = last_scrape_at or {}
+    for target in targets:
+        key = _target_key(target)
+        waits.append(next_run.get(key, now) - now)
+        if max_revisit_seconds > 0:
+            last = scrape_at.get(key)
+            if last is None:
+                waits.append(0.0)
+            else:
+                waits.append(max_revisit_seconds - (now - last))
     if not waits:
         return 1.0
     return max(0.05, min(waits))
@@ -701,23 +817,58 @@ class BrandWorker:
             try:
                 browser = self._ensure_browser()
                 now = time.monotonic()
-                target = _pick_due_target(
+                max_revisit = float(
+                    getattr(get_settings(), "scrape_max_revisit_seconds", 0.0) or 0.0
+                )
+                pick = _pick_due_target(
                     self.targets,
                     self._next_run,
                     now=now,
                     activity=self._target_activity,
+                    last_scrape_at=self._last_scrape_at,
+                    max_revisit_seconds=max_revisit,
                 )
-                if target is None:
+                if pick is None:
                     wait_s = _seconds_until_next(
-                        self.targets, self._next_run, now=now
+                        self.targets,
+                        self._next_run,
+                        now=now,
+                        last_scrape_at=self._last_scrape_at,
+                        max_revisit_seconds=max_revisit,
                     )
                     self._stop.wait(min(wait_s, 2.0))
                     continue
 
-                key = _target_key(target)
+                target = pick.target
+                forced_by_ceiling = pick.forced_by_ceiling
                 started = time.monotonic()
+                key = _target_key(target)
                 last = self._last_scrape_at.get(key)
                 seconds_since = (started - last) if last is not None else None
+                due_count = _count_actionable_targets(
+                    self.targets,
+                    self._next_run,
+                    now=now,
+                    last_scrape_at=self._last_scrape_at,
+                    max_revisit_seconds=max_revisit,
+                )
+                overdue_seconds = max(0.0, now - self._next_run.get(key, now))
+                if forced_by_ceiling and seconds_since is not None:
+                    overdue_seconds = max(overdue_seconds, seconds_since)
+                hotness = _activity_hotness(
+                    self._target_activity.get(key),
+                    now=now,
+                )
+                record_scrape_start(
+                    brand=target.brand,
+                    worker_id=self.worker_id,
+                    seconds_since_last=seconds_since,
+                    due_targets=due_count,
+                    overdue_seconds=overdue_seconds,
+                    activity_hotness=hotness,
+                    scheduled_poll_seconds=target_poll_interval_seconds(target),
+                    forced_by_ceiling=forced_by_ceiling,
+                )
                 outcome: ScrapeTargetOutcome | None = None
                 try:
                     outcome = _scrape_target(
@@ -783,6 +934,13 @@ class BrandWorker:
                         ),
                         page_saturated=act.page_saturated if act else None,
                     )
+                    record_scrape_success(
+                        brand=target.brand,
+                        worker_id=self.worker_id,
+                        duration_seconds=time.monotonic() - started,
+                        seconds_since_last=seconds_since,
+                        forced_by_ceiling=forced_by_ceiling,
+                    )
                     try:
                         from vinted_bot.services.scrape_block_tracker import (
                             record_scrape_cycle_success,
@@ -800,6 +958,14 @@ class BrandWorker:
                         worker_id=self.worker_id,
                         brand=target.brand,
                         error=str(exc)[:200],
+                    )
+                    record_scrape_error(
+                        brand=target.brand,
+                        worker_id=self.worker_id,
+                        duration_seconds=time.monotonic() - started,
+                        error=str(exc)[:200],
+                        seconds_since_last=seconds_since,
+                        forced_by_ceiling=forced_by_ceiling,
                     )
                     if (
                         isinstance(exc, CatalogFetchBlockedError)

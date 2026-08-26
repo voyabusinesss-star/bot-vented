@@ -17,6 +17,8 @@ log = get_logger(__name__)
 
 _QUEUE_MAX = 5000
 _SPILL_THRESHOLD = int(_QUEUE_MAX * 0.8)  # spill dès 80 % plein
+_SPILL_BACKLOG_WARN = 5000
+_STALE_SENDING_SECONDS = 300.0
 _queue: queue.Queue[Any] = queue.Queue(maxsize=_QUEUE_MAX)
 _worker_started = False
 _worker_lock = threading.Lock()
@@ -53,10 +55,6 @@ def _release(filter_id: int, vinted_id: int) -> None:
         _inflight.discard(key)
 
 
-def queue_size() -> int:
-    return _queue.qsize()
-
-
 def spill_pending_count() -> int:
     try:
         from sqlalchemy import func, select
@@ -75,6 +73,71 @@ def spill_pending_count() -> int:
             )
     except Exception:  # noqa: BLE001
         return 0
+
+
+def queue_size() -> int:
+    return _queue.qsize()
+
+
+def queue_stats() -> dict[str, int]:
+    return {
+        "memory_queue": queue_size(),
+        "spill_pending": spill_pending_count(),
+        "inflight": len(_inflight),
+    }
+
+
+def is_permanent_dm_error(exc: BaseException | str) -> bool:
+    """Erreurs Discord où un retry est inutile (DMs fermés, user inconnu, etc.)."""
+    msg = str(exc).lower()
+    permanent_markers = (
+        "50007",
+        "cannot send messages to this user",
+        "50001",
+        "missing access",
+        "10013",
+        "unknown user",
+        "403:",
+        "404:",
+    )
+    return any(marker in msg for marker in permanent_markers)
+
+
+def _recover_stale_sending_rows(*, max_age_seconds: float = _STALE_SENDING_SECONDS) -> int:
+    """Après crash/redeploy : repasse sending → pending."""
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        from sqlalchemy import update
+
+        from vinted_bot.db.models import PrivateAlertOutbox
+        from vinted_bot.db.session import session_scope
+
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
+        with session_scope() as session:
+            res = session.execute(
+                update(PrivateAlertOutbox)
+                .where(PrivateAlertOutbox.status == "sending")
+                .where(PrivateAlertOutbox.enqueued_at < cutoff)
+                .values(status="pending")
+            )
+            count = int(res.rowcount or 0)
+        if count:
+            log.warning("private_alert_stale_sending_recovered", count=count)
+        return count
+    except Exception as exc:  # noqa: BLE001
+        log.warning("private_alert_stale_recover_failed", error=str(exc)[:160])
+        return 0
+
+
+def _warn_spill_backlog() -> None:
+    pending = spill_pending_count()
+    if pending >= _SPILL_BACKLOG_WARN:
+        log.warning(
+            "private_alert_spill_backlog",
+            spill_pending=pending,
+            threshold=_SPILL_BACKLOG_WARN,
+        )
 
 
 def _spill_to_db(alert: QueuedPrivateAlert) -> bool:
@@ -103,6 +166,7 @@ def _spill_to_db(alert: QueuedPrivateAlert) -> bool:
                 )
             )
             session.execute(stmt)
+        _warn_spill_backlog()
         log.info(
             "private_alert_spilled",
             filter_id=alert.filter_id,
@@ -232,6 +296,7 @@ def _worker_loop() -> None:
     from vinted_bot.notify.discord import DiscordNotifier
 
     log.info("private_alert_worker_start")
+    _recover_stale_sending_rows()
     settings = get_settings()
     delay = float(getattr(settings, "private_filter_dm_delay_seconds", 0.4) or 0.0)
     delay = max(0.0, min(delay, 5.0))
@@ -257,15 +322,27 @@ def _worker_loop() -> None:
                     if spill_id is not None:
                         _mark_spill(spill_id, status="sent")
                 except Exception as exc:  # noqa: BLE001
+                    permanent = is_permanent_dm_error(exc)
                     log.warning(
                         "private_filter_dm_failed",
                         discord_user_id=alert.discord_user_id,
                         filter_id=alert.filter_id,
                         vinted_id=alert.vinted_id,
+                        permanent=permanent,
                         error=str(exc)[:160],
                     )
                     if spill_id is not None:
-                        _mark_spill(spill_id, status="pending")
+                        _mark_spill(
+                            spill_id,
+                            status="failed" if permanent else "pending",
+                        )
+                    elif not permanent:
+                        if not _spill_to_db(alert):
+                            log.warning(
+                                "private_alert_memory_send_lost",
+                                filter_id=alert.filter_id,
+                                vinted_id=alert.vinted_id,
+                            )
                 finally:
                     _release(alert.filter_id, alert.vinted_id)
                     if from_memory:

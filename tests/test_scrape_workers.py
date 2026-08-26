@@ -159,7 +159,93 @@ def test_pick_due_same_list_order_irrelevant_with_activity() -> None:
     a = _pick_due_target(targets, next_run, now=now, activity=activity)
     b = _pick_due_target(list(reversed(targets)), next_run, now=now, activity=activity)
     assert a is not None and b is not None
-    assert a.brand == b.brand == "nike"
+    assert a.target.brand == b.target.brand == "nike"
+
+
+def test_pick_due_ceiling_forces_starving_brand_over_hot() -> None:
+    calm = _target("ganni", "low")
+    hot = _target("nike", "high")
+    targets = [calm, hot]
+    now = 1000.0
+    key_calm = _target_key(calm)
+    key_hot = _target_key(hot)
+    next_run = {
+        key_calm: now + 120.0,
+        key_hot: now - 1.0,
+    }
+    last_scrape_at = {
+        key_calm: now - 300.0,
+        key_hot: now - 20.0,
+    }
+    activity = {
+        key_hot: TargetActivity(
+            newest_age_s=8.0,
+            oldest_age_s=20.0,
+            page_saturated=True,
+            items_created=3,
+            updated_at=now,
+        ),
+        key_calm: TargetActivity(
+            newest_age_s=900.0,
+            updated_at=now - 300.0,
+        ),
+    }
+    pick = _pick_due_target(
+        targets,
+        next_run,
+        now=now,
+        activity=activity,
+        last_scrape_at=last_scrape_at,
+        max_revisit_seconds=240.0,
+    )
+    assert pick is not None
+    assert pick.target.brand == "ganni"
+    assert pick.forced_by_ceiling is True
+
+
+def test_pick_due_ceiling_does_not_slow_hot_brands() -> None:
+    nike = _target("nike", "high")
+    now = 2000.0
+    key = _target_key(nike)
+    next_run = {key: now - 1.0}
+    last_scrape_at = {key: now - 25.0}
+    activity = {
+        key: TargetActivity(
+            newest_age_s=5.0,
+            oldest_age_s=15.0,
+            page_saturated=True,
+            updated_at=now,
+        )
+    }
+    pick = _pick_due_target(
+        [nike],
+        next_run,
+        now=now,
+        activity=activity,
+        last_scrape_at=last_scrape_at,
+        max_revisit_seconds=240.0,
+    )
+    assert pick is not None
+    assert pick.target.brand == "nike"
+    assert pick.forced_by_ceiling is False
+
+
+def test_seconds_until_next_includes_revisit_ceiling() -> None:
+    from vinted_bot.jobs.scrape_workers import _seconds_until_next
+
+    target = _target("lacoste", "medium")
+    now = 500.0
+    key = _target_key(target)
+    next_run = {key: now + 600.0}
+    last_scrape_at = {key: now - 200.0}
+    wait = _seconds_until_next(
+        [target],
+        next_run,
+        now=now,
+        last_scrape_at=last_scrape_at,
+        max_revisit_seconds=240.0,
+    )
+    assert wait == 40.0
 
 
 def test_brand_worker_backoff_flag() -> None:

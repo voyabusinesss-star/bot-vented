@@ -906,6 +906,14 @@ class DiscordNotifier:
             "/users/@me/channels",
             json={"recipient_id": str(int(discord_user_id))},
         )
+        if response.status_code == 429:
+            retry_after = float(response.json().get("retry_after", 2))
+            log.warning("discord_rate_limited", retry_after=retry_after, via="open_dm")
+            time.sleep(retry_after)
+            response = self.client.post(
+                "/users/@me/channels",
+                json={"recipient_id": str(int(discord_user_id))},
+            )
         if response.status_code >= 400:
             raise RuntimeError(
                 f"Open DM {response.status_code}: {response.text[:400]}"

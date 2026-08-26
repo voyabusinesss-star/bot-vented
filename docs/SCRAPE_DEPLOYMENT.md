@@ -124,6 +124,7 @@ SCRAPE_BURST_OFF_SECONDS=0
 SCRAPE_AUTO_REDEPLOY_ENABLED=1
 SCRAPE_403_REDEPLOY_THRESHOLD=8
 SCRAPE_AUTO_REDEPLOY_COOLDOWN_SECONDS=1800
+SCRAPE_MAX_REVISIT_SECONDS=240
 ```
 
 **Limites :** le redeploy change d’hôte Railway, pas garanti une nouvelle IP egress. Si >2–3 redeploys/h sans posts → repasser proxy résidentiel FR.

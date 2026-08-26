@@ -153,7 +153,7 @@ def test_scheduler_picks_due_independently_of_list_order() -> None:
     }
     picked = _pick_due_target(targets, next_run, now=now)
     assert picked is not None
-    assert picked.brand == "nike"
+    assert picked.target.brand == "nike"
 
 
 def test_scheduler_prefers_hot_vinted_market_over_alphabet() -> None:
@@ -188,7 +188,7 @@ def test_scheduler_prefers_hot_vinted_market_over_alphabet() -> None:
         activity=activity,
     )
     assert picked is not None
-    assert picked.brand == "nike"
+    assert picked.target.brand == "nike"
 
 
 def test_target_poll_interval_priority_and_override() -> None:

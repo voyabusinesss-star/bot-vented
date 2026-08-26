@@ -3,6 +3,7 @@
 from vinted_bot.services.private_alert_queue import (
     QueuedPrivateAlert,
     enqueue_private_alert,
+    is_permanent_dm_error,
     queue_size,
     _inflight,
     _inflight_lock,
@@ -40,3 +41,9 @@ def test_enqueue_dedupes_same_filter_listing() -> None:
     # Après release (échec send), on peut requeue
     assert enqueue_private_alert(a) is True
     _reset_queue()
+
+
+def test_is_permanent_dm_error() -> None:
+    assert is_permanent_dm_error(RuntimeError("Open DM 403: Cannot DM"))
+    assert is_permanent_dm_error("Discord API 50007: Cannot send messages to this user")
+    assert not is_permanent_dm_error(RuntimeError("Discord API 429: rate limited"))
