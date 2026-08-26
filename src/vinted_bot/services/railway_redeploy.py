@@ -1,4 +1,4 @@
-"""Redeploy Railway bot-scrape après 403 Vinted persistants (nouvel hôte / IP)."""
+"""Redeploy Railway bot-scrape après échecs scrape persistants (403, thread limit)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,10 @@ from vinted_bot.db.repositories import get_checkpoint, set_checkpoint
 from vinted_bot.db.session import session_scope
 from vinted_bot.services.scrape_block_tracker import (
     consecutive_403_count,
+    consecutive_thread_limit_count,
     recent_403_count,
+    recent_thread_limit_count,
+    tracker_snapshot,
 )
 from vinted_bot.utils.logging import get_logger
 
@@ -37,14 +40,17 @@ def _last_redeploy_ts() -> float | None:
         return None
 
 
-def _persist_redeploy_ts(*, reason: str) -> None:
+def _persist_redeploy_ts(*, reason: str, extra: dict[str, Any] | None = None) -> None:
     now = time.time()
+    payload: dict[str, Any] = {
+        "ts": now,
+        "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+        "reason": reason,
+    }
+    if extra:
+        payload.update(extra)
     with session_scope() as session:
-        set_checkpoint(
-            session,
-            _CHECKPOINT_KEY,
-            {"ts": now, "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)), "reason": reason},
-        )
+        set_checkpoint(session, _CHECKPOINT_KEY, payload)
 
 
 def redeploy_cooldown_remaining(*, cooldown_seconds: float) -> float:
@@ -55,7 +61,7 @@ def redeploy_cooldown_remaining(*, cooldown_seconds: float) -> float:
     return max(0.0, remaining)
 
 
-def trigger_service_redeploy(*, reason: str = "403") -> bool:
+def trigger_service_redeploy(*, reason: str = "403", extra: dict[str, Any] | None = None) -> bool:
     """Appelle l'API Railway. Retourne True si la mutation a répondu sans erreur GraphQL."""
     settings = get_settings()
     token = (settings.railway_api_token or "").strip()
@@ -103,12 +109,13 @@ def trigger_service_redeploy(*, reason: str = "403") -> bool:
         log.warning("railway_redeploy_graphql_error", errors=body.get("errors"))
         return False
 
-    _persist_redeploy_ts(reason=reason)
+    _persist_redeploy_ts(reason=reason, extra=extra)
     log.warning(
         "railway_redeploy_triggered",
         reason=reason,
         service_id=service_id,
         environment_id=environment_id,
+        **(extra or {}),
     )
     return True
 
@@ -144,39 +151,77 @@ def _post_redeploy_alert(message: str) -> None:
         log.warning("railway_redeploy_alert_failed", error=str(exc)[:160])
 
 
-def maybe_auto_redeploy_on_403() -> bool:
-    """Déclenche un redeploy si 403 persistants (sans proxy). Retourne True si déclenché."""
+def _auto_redeploy_common_checks() -> float | None:
     settings = get_settings()
     if not settings.scrape_auto_redeploy_enabled:
-        return False
+        return None
     if settings.scrape_proxy_urls:
-        return False
-
-    threshold = int(settings.scrape_403_redeploy_threshold)
-    consecutive = consecutive_403_count()
-    recent = recent_403_count(window_seconds=600.0)
-    if consecutive < threshold and recent < threshold:
-        return False
-
+        return None
     cooldown = float(settings.scrape_auto_redeploy_cooldown_seconds)
     remaining = redeploy_cooldown_remaining(cooldown_seconds=cooldown)
     if remaining > 0:
         log.info(
             "scrape_auto_redeploy_cooldown",
             remaining_seconds=round(remaining, 1),
-            consecutive_403=consecutive,
         )
+        return None
+    return cooldown
+
+
+def maybe_auto_redeploy_on_scrape_failure() -> bool:
+    """Déclenche un redeploy si 403 ou thread limit persistants (sans proxy)."""
+    if _auto_redeploy_common_checks() is None:
+        return False
+
+    snap = tracker_snapshot()
+    thread_threshold = int(get_settings().scrape_thread_redeploy_threshold)
+    consecutive_thread = consecutive_thread_limit_count()
+    recent_thread = recent_thread_limit_count(window_seconds=600.0)
+    if consecutive_thread >= thread_threshold or recent_thread >= thread_threshold:
+        log.warning(
+            "scrape_thread_limit_threshold_reached",
+            consecutive_thread_limit=consecutive_thread,
+            recent_thread_limit_10m=recent_thread,
+            threshold=thread_threshold,
+            chromium_processes=snap.get("last_thread_limit_chrome_processes"),
+            python_threads=snap.get("last_thread_limit_python_threads"),
+        )
+        _post_redeploy_alert(
+            f"**Thread limit Playwright** "
+            f"(consecutive={consecutive_thread}, 10m={recent_thread}).\n"
+            f"Chromium processes au crash: "
+            f"`{snap.get('last_thread_limit_chrome_processes')}` — "
+            f"Python threads: `{snap.get('last_thread_limit_python_threads')}`.\n"
+            f"Redeploy Railway `bot-scrape` pour repartir proprement."
+        )
+        return trigger_service_redeploy(
+            reason="thread_limit_threshold",
+            extra={
+                "chromium_processes": snap.get("last_thread_limit_chrome_processes"),
+                "python_threads": snap.get("last_thread_limit_python_threads"),
+            },
+        )
+
+    threshold_403 = int(get_settings().scrape_403_redeploy_threshold)
+    consecutive_403 = consecutive_403_count()
+    recent_403 = recent_403_count(window_seconds=600.0)
+    if consecutive_403 < threshold_403 and recent_403 < threshold_403:
         return False
 
     log.warning(
         "scrape_403_threshold_reached",
-        consecutive_403=consecutive,
-        recent_403_10m=recent,
-        threshold=threshold,
+        consecutive_403=consecutive_403,
+        recent_403_10m=recent_403,
+        threshold=threshold_403,
     )
     _post_redeploy_alert(
-        f"**403 Vinted persistants** (consecutive={consecutive}, 10m={recent}).\n"
+        f"**403 Vinted persistants** (consecutive={consecutive_403}, 10m={recent_403}).\n"
         f"Déclenchement redeploy Railway `bot-scrape` pour tenter une nouvelle IP.\n"
         f"Le scrape repartira automatiquement au boot."
     )
     return trigger_service_redeploy(reason="403_threshold")
+
+
+def maybe_auto_redeploy_on_403() -> bool:
+    """Alias historique — vérifie 403 et thread limit."""
+    return maybe_auto_redeploy_on_scrape_failure()

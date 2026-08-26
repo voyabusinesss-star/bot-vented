@@ -16,6 +16,7 @@ from vinted_bot.clients.vinted_browser import (
     CatalogFetchBlockedError,
     VintedBrowser,
     catalog_error_backoff_seconds,
+    is_thread_limit_error,
 )
 from vinted_bot.config import get_settings
 from vinted_bot.config_loader import (
@@ -38,6 +39,48 @@ from vinted_bot.utils.proxy import assign_proxy_for_worker, rotate_proxy
 
 log = get_logger(__name__)
 _last_silence_alert_at = 0.0
+_last_chromium_health_log_at = 0.0
+
+
+def _record_thread_limit_failure(exc: BaseException | str) -> None:
+    if not is_thread_limit_error(exc):
+        return
+    try:
+        from vinted_bot.services.chromium_health import chromium_process_snapshot
+        from vinted_bot.services.scrape_block_tracker import record_thread_limit_error
+
+        snap = chromium_process_snapshot()
+        record_thread_limit_error(
+            error=str(exc),
+            chrome_processes=snap.get("chromium_processes"),
+            python_threads=snap.get("python_threads"),
+        )
+        log.error(
+            "scrape_thread_limit_recorded",
+            error=str(exc)[:160],
+            chromium_processes=snap.get("chromium_processes"),
+            python_threads=snap.get("python_threads"),
+        )
+    except Exception as log_exc:  # noqa: BLE001
+        log.warning("scrape_thread_limit_record_failed", error=str(log_exc)[:120])
+
+
+def _maybe_log_chromium_health() -> None:
+    global _last_chromium_health_log_at
+    settings = get_settings()
+    interval = float(
+        getattr(settings, "scrape_chromium_health_log_seconds", 300.0) or 300.0
+    )
+    now = time.time()
+    if now - _last_chromium_health_log_at < interval:
+        return
+    _last_chromium_health_log_at = now
+    try:
+        from vinted_bot.services.chromium_health import log_chromium_health
+
+        log_chromium_health(event="supervisor_periodic")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("chromium_health_log_failed", error=str(exc)[:120])
 
 
 def _post_scrape_ops_alert(message: str) -> None:
@@ -408,15 +451,15 @@ class BrandWorker:
         if self._browser is None:
             return
         try:
-            # stop() propre > force_stop (évite fuites threads Playwright).
             self._browser.stop()
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            _record_thread_limit_failure(exc)
             try:
                 force = getattr(self._browser, "force_stop", None)
                 if callable(force):
                     force()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as force_exc:  # noqa: BLE001
+                _record_thread_limit_failure(force_exc)
         self._browser = None
 
     def _recovery_sleep(self, exc: BaseException, *, default: float) -> None:
@@ -489,12 +532,13 @@ class BrandWorker:
                 self._browser.start()
             except RuntimeError as exc:
                 self._browser = None
-                if "can't start new thread" in str(exc).lower():
+                if is_thread_limit_error(exc):
                     log.error(
                         "brand_worker_thread_limit",
                         worker_id=self.worker_id,
                         error=str(exc)[:160],
                     )
+                    _record_thread_limit_failure(exc)
                     time.sleep(120.0)
                 raise
             try:
@@ -739,8 +783,18 @@ class BrandWorker:
                         ),
                         page_saturated=act.page_saturated if act else None,
                     )
+                    try:
+                        from vinted_bot.services.scrape_block_tracker import (
+                            record_scrape_cycle_success,
+                        )
+
+                        record_scrape_cycle_success()
+                    except Exception:  # noqa: BLE001
+                        pass
                 except Exception as exc:  # noqa: BLE001
                     self._touch()
+                    if is_thread_limit_error(exc):
+                        _record_thread_limit_failure(exc)
                     log.exception(
                         "brand_worker_target_failed",
                         worker_id=self.worker_id,
@@ -814,6 +868,8 @@ class BrandWorker:
                     worker_id=self.worker_id,
                     error=str(exc)[:200],
                 )
+                if is_thread_limit_error(exc):
+                    _record_thread_limit_failure(exc)
                 write_scrape_heartbeat(
                     cycle=self._cycle,
                     worker_id=self.worker_id,
@@ -1056,10 +1112,13 @@ def run_permanent_scrape_pool(
         while True:
             time.sleep(20.0)
             _check_scrape_silence(silence_after=silence_after)
+            _maybe_log_chromium_health()
             try:
-                from vinted_bot.services.railway_redeploy import maybe_auto_redeploy_on_403
+                from vinted_bot.services.railway_redeploy import (
+                    maybe_auto_redeploy_on_scrape_failure,
+                )
 
-                maybe_auto_redeploy_on_403()
+                maybe_auto_redeploy_on_scrape_failure()
             except Exception as exc:  # noqa: BLE001
                 log.warning("scrape_auto_redeploy_check_failed", error=str(exc)[:160])
             # Au-dessus du backoff proxy (600 s) + marge catalog (~55 s × retries).

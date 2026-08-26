@@ -71,11 +71,32 @@ def catalog_error_backoff_seconds(exc: BaseException) -> float:
     msg = str(exc).lower()
     if "bandwidth limit" in msg or "err_tunnel_connection_failed" in msg:
         return 600.0
-    if "can't start new thread" in msg:
+    if "can't start new thread" in msg or "thread limit" in msg:
         return 120.0
     if "403" in msg or "429" in msg or "rate_limit" in msg:
         return 90.0
     return 0.0
+
+
+def is_thread_limit_error(exc: BaseException | str) -> bool:
+    from vinted_bot.services.scrape_block_tracker import is_thread_limit_error as _is
+
+    return _is(exc)
+
+
+def _record_thread_limit(exc: BaseException | str) -> None:
+    try:
+        from vinted_bot.services.chromium_health import chromium_process_snapshot
+        from vinted_bot.services.scrape_block_tracker import record_thread_limit_error
+
+        snap = chromium_process_snapshot()
+        record_thread_limit_error(
+            error=str(exc),
+            chrome_processes=snap.get("chromium_processes"),
+            python_threads=snap.get("python_threads"),
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _catalog_response_blocked(status: int, body: str) -> tuple[bool, bool, float]:
@@ -161,6 +182,36 @@ class VintedBrowser:
         self._page: Page | None = None
         self._cmd_q: queue.Queue[Any] = queue.Queue()
         self._thread: threading.Thread | None = None
+        self._lifecycle_id = 0
+
+    @staticmethod
+    def _close_playwright_handles(
+        *,
+        page: Page | None = None,
+        context: BrowserContext | None = None,
+        browser: Browser | None = None,
+        playwright: Playwright | None = None,
+    ) -> None:
+        if page is not None:
+            try:
+                page.close()
+            except Exception:  # noqa: BLE001
+                pass
+        if context is not None:
+            try:
+                context.close()
+            except Exception:  # noqa: BLE001
+                pass
+        if browser is not None:
+            try:
+                browser.close()
+            except Exception:  # noqa: BLE001
+                pass
+        if playwright is not None:
+            try:
+                playwright.stop()
+            except Exception:  # noqa: BLE001
+                pass
 
     def _worker(self) -> None:
         while True:
@@ -178,11 +229,10 @@ class VintedBrowser:
         if self._thread is not None and threading.current_thread() is self._thread:
             return getattr(self, name)(*args, **kwargs)
         if self._thread is None or not self._thread.is_alive():
-            # Après force_stop / crash : nettoyer puis relancer (évite fuites threads).
             if name == "_start_impl":
                 raise RuntimeError("VintedBrowser non démarré — appeler start()")
             log.warning("browser_auto_restart", call=name)
-            self._cleanup_dead_thread()
+            self.force_stop()
             self.start()
         reply: queue.Queue[Any] = queue.Queue(maxsize=1)
         self._cmd_q.put((name, args, kwargs, reply))
@@ -214,18 +264,27 @@ class VintedBrowser:
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
+        if (
+            self._thread is not None
+            or self._browser is not None
+            or self._playwright is not None
+        ):
+            self.force_stop()
         self._cleanup_dead_thread()
+        self._lifecycle_id += 1
+        lifecycle = self._lifecycle_id
         self._thread = threading.Thread(
             target=self._worker,
-            name="playwright-vinted",
+            name=f"playwright-vinted-{lifecycle}",
             daemon=True,
         )
         try:
             self._thread.start()
         except RuntimeError as exc:
             self._thread = None
-            if "can't start new thread" in str(exc).lower():
+            if is_thread_limit_error(exc):
                 log.error("browser_thread_limit", error=str(exc))
+                _record_thread_limit(exc)
             raise
         self._call("_start_impl")
 
@@ -253,30 +312,36 @@ class VintedBrowser:
         """Abandonne un thread Playwright coincé sans attendre la file de commandes."""
         thread = self._thread
         browser = self._browser
+        context = self._context
+        page = self._page
         playwright = self._playwright
         self._thread = None
         self._page = None
         self._context = None
         self._browser = None
         self._playwright = None
+        if thread is not None and thread.is_alive():
+            try:
+                reply: queue.Queue[Any] = queue.Queue(maxsize=1)
+                self._cmd_q.put_nowait(("_stop_impl", (), {}, reply))
+                try:
+                    reply.get(timeout=3.0)
+                except queue.Empty:
+                    pass
+            except Exception:  # noqa: BLE001
+                pass
         try:
             self._cmd_q.put_nowait(None)
         except Exception:  # noqa: BLE001
             pass
-        # Best-effort close hors thread worker (peut échouer si déjà mort).
-        try:
-            if browser is not None:
-                browser.close()
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            if playwright is not None:
-                playwright.stop()
-        except Exception:  # noqa: BLE001
-            pass
+        self._close_playwright_handles(
+            page=page,
+            context=context,
+            browser=browser,
+            playwright=playwright,
+        )
         if thread is not None and thread.is_alive():
-            thread.join(timeout=2.0)
-        # Nouvelle file : l'ancienne peut contenir des commandes orphelines.
+            thread.join(timeout=3.0)
         self._cmd_q = queue.Queue()
         log.warning("browser_force_stopped")
 
@@ -296,39 +361,62 @@ class VintedBrowser:
         )
         from vinted_bot.utils.proxy import playwright_proxy_from_url
 
-        proxy_dict = None
-        if self.proxy_url:
-            try:
-                proxy_dict = playwright_proxy_from_url(self.proxy_url)
-            except ValueError as exc:
-                log.error("browser_proxy_invalid", error=str(exc), url=self.proxy_url)
-                raise RuntimeError(
-                    f"SCRAPE_PROXY_URLS invalide ({exc}) — "
-                    "format attendu: http://user:pass@host:port (sans crochets JSON)"
-                ) from exc
+        playwright: Playwright | None = None
+        browser: Browser | None = None
+        context: BrowserContext | None = None
+        page: Page | None = None
+        try:
+            proxy_dict = None
+            if self.proxy_url:
+                try:
+                    proxy_dict = playwright_proxy_from_url(self.proxy_url)
+                except ValueError as exc:
+                    log.error(
+                        "browser_proxy_invalid",
+                        error=str(exc),
+                        url=self.proxy_url,
+                    )
+                    raise RuntimeError(
+                        f"SCRAPE_PROXY_URLS invalide ({exc}) — "
+                        "format attendu: http://user:pass@host:port (sans crochets JSON)"
+                    ) from exc
 
-        self._playwright = sync_playwright().start()
-        self._browser = launch_vinted_browser(
-            self._playwright,
-            headless=self.headless,
-            proxy=proxy_dict,
-        )
-        context_kwargs: dict[str, Any] = {
-            "locale": "fr-FR",
-            "viewport": {"width": 1280, "height": 900},
-            "user_agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/122.0.0.0 Safari/537.36"
-            ),
-        }
-        # Proxy déjà passé au launch ; Playwright accepte aussi au context.
-        # On le met au launch uniquement pour éviter double-config.
-        self._context = self._browser.new_context(**context_kwargs)
-        apply_vinted_stealth(self._context)
-        self._page = self._context.new_page()
-        self._page.set_default_timeout(self.timeout_ms)
-        self._install_bandwidth_saver_routes()
+            playwright = sync_playwright().start()
+            browser = launch_vinted_browser(
+                playwright,
+                headless=self.headless,
+                proxy=proxy_dict,
+            )
+            context_kwargs: dict[str, Any] = {
+                "locale": "fr-FR",
+                "viewport": {"width": 1280, "height": 900},
+                "user_agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/122.0.0.0 Safari/537.36"
+                ),
+            }
+            context = browser.new_context(**context_kwargs)
+            apply_vinted_stealth(context)
+            page = context.new_page()
+            page.set_default_timeout(self.timeout_ms)
+            self._playwright = playwright
+            self._browser = browser
+            self._context = context
+            self._page = page
+            self._install_bandwidth_saver_routes()
+        except Exception:
+            self._close_playwright_handles(
+                page=page,
+                context=context,
+                browser=browser,
+                playwright=playwright,
+            )
+            self._page = None
+            self._context = None
+            self._browser = None
+            self._playwright = None
+            raise
 
     def _install_bandwidth_saver_routes(self) -> None:
         """page.route — bloque assets lourds sur warm-up (fonts/images/CSS/analytics)."""
@@ -350,25 +438,20 @@ class VintedBrowser:
         log.info("browser_bandwidth_saver_enabled")
 
     def _stop_impl(self) -> None:
-        try:
-            if self._context is not None:
-                self._context.close()
-        except Exception:
-            pass
-        try:
-            if self._browser is not None:
-                self._browser.close()
-        except Exception:
-            pass
-        try:
-            if self._playwright is not None:
-                self._playwright.stop()
-        except Exception:
-            pass
+        page = self._page
+        context = self._context
+        browser = self._browser
+        playwright = self._playwright
         self._page = None
         self._context = None
         self._browser = None
         self._playwright = None
+        self._close_playwright_handles(
+            page=page,
+            context=context,
+            browser=browser,
+            playwright=playwright,
+        )
 
     @property
     def page(self) -> Page:
@@ -629,17 +712,12 @@ class VintedBrowser:
     def _recreate_page_after_crash(self) -> None:
         """Recrée page/context après un crash renderer (sans tuer tout Playwright)."""
         log.warning("browser_page_recreate_after_crash")
+        old_page = self._page
+        old_context = self._context
+        self._page = None
+        self._context = None
         try:
-            if self._page is not None:
-                try:
-                    self._page.close()
-                except Exception:  # noqa: BLE001
-                    pass
-            if self._context is not None:
-                try:
-                    self._context.close()
-                except Exception:  # noqa: BLE001
-                    pass
+            self._close_playwright_handles(page=old_page, context=old_context)
             if self._browser is None:
                 return
             context_kwargs: dict[str, Any] = {
@@ -657,6 +735,7 @@ class VintedBrowser:
             apply_vinted_stealth(self._context)
             self._page = self._context.new_page()
             self._page.set_default_timeout(self.timeout_ms)
+            self._install_bandwidth_saver_routes()
             try:
                 self._warm_up_impl()
             except Exception:  # noqa: BLE001

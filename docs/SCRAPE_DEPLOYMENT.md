@@ -145,7 +145,9 @@ RAILWAY_ENVIRONMENT_ID=<uuid>
 4. Désactiver **Static Outbound IPs** sur `bot-scrape`.
 5. Sur Mac local : `ENABLE_SCRAPE=0` pour une seule source de posts.
 
-**Observabilité :** heartbeat `consecutive_403`, logs `scrape_403_threshold_reached`, `railway_redeploy_triggered`, alerte Discord `#logs`.
+**Observabilité :** heartbeat `consecutive_403`, `consecutive_thread_limit`, logs `chromium_health` (toutes les 5 min), `scrape_thread_limit_threshold_reached`, `railway_redeploy_triggered`, alerte Discord `#logs`.
+
+**Thread limit Playwright :** si `can't start new thread` persiste (≥3 en 10 min), auto-redeploy avec log du nombre de processus Chromium au crash. Cooldown partagé avec les 403 (défaut 15 min).
 
 ## D — 24/7 Railway pro
 

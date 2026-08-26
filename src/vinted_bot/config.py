@@ -193,7 +193,9 @@ class Settings(BaseSettings):
     # Auto-redeploy Railway sur 403 Vinted (sans proxy)
     scrape_auto_redeploy_enabled: bool = False
     scrape_403_redeploy_threshold: int = Field(default=8, ge=1, le=100)
-    scrape_auto_redeploy_cooldown_seconds: float = Field(default=1800.0, ge=300.0)
+    scrape_thread_redeploy_threshold: int = Field(default=3, ge=1, le=50)
+    scrape_auto_redeploy_cooldown_seconds: float = Field(default=900.0, ge=300.0)
+    scrape_chromium_health_log_seconds: float = Field(default=300.0, ge=60.0)
     railway_api_token: str = ""
     railway_service_id: str = ""
     railway_environment_id: str = ""

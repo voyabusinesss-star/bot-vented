@@ -23,6 +23,12 @@ def _reset_tracker():
         sbt._tracker.last_catalog_ok_at = None
         sbt._tracker.total_403 = 0
         sbt._tracker._recent_403_at.clear()
+        sbt._tracker.consecutive_thread_limit = 0
+        sbt._tracker.total_thread_limit = 0
+        sbt._tracker.last_thread_limit_at = None
+        sbt._tracker.last_thread_limit_chrome_processes = None
+        sbt._tracker.last_thread_limit_python_threads = None
+        sbt._tracker._recent_thread_limit_at.clear()
     yield
 
 
@@ -31,7 +37,8 @@ def _redeploy_settings(**overrides) -> Settings:
         scrape_auto_redeploy_enabled=True,
         scrape_proxy_urls=[],
         scrape_403_redeploy_threshold=8,
-        scrape_auto_redeploy_cooldown_seconds=1800.0,
+        scrape_thread_redeploy_threshold=3,
+        scrape_auto_redeploy_cooldown_seconds=900.0,
         railway_api_token="tok",
         railway_service_id="svc",
         railway_environment_id="env",
@@ -89,6 +96,29 @@ def test_maybe_auto_redeploy_triggers_at_threshold(
             sbt._tracker.consecutive_403 = 8
         assert maybe_auto_redeploy_on_403() is True
     mock_trigger.assert_called_once_with(reason="403_threshold")
+    mock_alert.assert_called_once()
+
+
+@patch("vinted_bot.services.railway_redeploy._post_redeploy_alert")
+@patch("vinted_bot.services.railway_redeploy.trigger_service_redeploy", return_value=True)
+@patch("vinted_bot.services.railway_redeploy.redeploy_cooldown_remaining", return_value=0.0)
+@patch("vinted_bot.services.railway_redeploy.get_settings")
+def test_maybe_auto_redeploy_triggers_on_thread_limit(
+    mock_settings, mock_cooldown, mock_trigger, mock_alert
+) -> None:
+    mock_settings.return_value = _redeploy_settings()
+    with _reset_tracker():
+        with sbt._lock:
+            sbt._tracker.consecutive_thread_limit = 3
+            sbt._tracker.last_thread_limit_chrome_processes = 14
+            sbt._tracker.last_thread_limit_python_threads = 52
+        from vinted_bot.services.railway_redeploy import (
+            maybe_auto_redeploy_on_scrape_failure,
+        )
+
+        assert maybe_auto_redeploy_on_scrape_failure() is True
+    mock_trigger.assert_called_once()
+    assert mock_trigger.call_args.kwargs["reason"] == "thread_limit_threshold"
     mock_alert.assert_called_once()
 
 
