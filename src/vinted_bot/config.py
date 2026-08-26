@@ -184,6 +184,8 @@ class Settings(BaseSettings):
     # Mode rafales (0 = boucle 24/7) — ex. ON 300 s / OFF 600 s pour économiser proxy
     scrape_burst_on_seconds: float = Field(default=0.0, ge=0.0)
     scrape_burst_off_seconds: float = Field(default=0.0, ge=0.0)
+    # Bloque images/fonts/CSS/analytics sur warm-up (page.route) — réduit Go proxy
+    scrape_block_heavy_resources: bool = True
     # Proxies HTTP/SOCKS (CSV ou lignes) — 1 sticky par worker, rotation au recycle
     scrape_proxy_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
 

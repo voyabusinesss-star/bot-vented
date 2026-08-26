@@ -43,12 +43,69 @@ DISCORD_OUTBOX_MAX_MESSAGES=8
 
 ## C — Rafales (cron-like sans cron externe)
 
-Divise la conso par ~2–3 ; annonces un peu moins fraîches :
+Divise la conso par ~2–3 ; annonces un peu moins fraîches.  
+Pendant la phase **OFF**, le worker **ferme Chromium** (`browser_closed=True` dans les logs) — pas de keep-alive proxy.
 
 ```env
 SCRAPE_BURST_ON_SECONDS=300
 SCRAPE_BURST_OFF_SECONDS=600
+SCRAPE_BLOCK_HEAVY_RESOURCES=true
 ```
+
+## Est-ce que 10 Go tient la route ? (calcul rapide)
+
+Le bot appelle surtout **`/api/v2/catalog/items`** (~50–150 Ko JSON/requête via proxy).  
+Le warm-up (`vinted.fr` une fois par session) est le seul vrai chargement HTML — d’où `page.route()` pour bloquer images/fonts/CSS/analytics.
+
+**Formule :**
+
+```text
+Go/mois ≈ (requêtes_catalogue/jour × Ko moyen × 30) / 1_000_000
+         + warm-ups/jour × ~0,3–1 Mo (avec blocage assets)
+         + filtres_privés/jour × ~100 Ko
+```
+
+Hypothèses : **~40 cibles** actives, poll **5 min** par marque, rafales **8 h/jour** (5 min ON / 10 min OFF) :
+
+| Poste | Calcul | / jour | / mois (×30) |
+|-------|--------|--------|--------------|
+| Catalogue API | 40 × (3600/300) × 8 h × 100 Ko | ~384 Mo | **~11,5 Go** |
+| Idem avec poll **3 min** | 40 × 20/h × 8 h × 100 Ko | ~640 Mo | **~19 Go** ❌ |
+| Poll 5 min + **75 Ko** moyen | 3840 × 75 Ko | ~288 Mo | **~8,6 Go** ✅ |
+| Warm-ups (~96 restarts/j) | 96 × 0,5 Mo | ~48 Mo | ~1,4 Go |
+| Filtres privés (45 s) | 8×3600/45 × 100 Ko | ~64 Mo | ~1,9 Go |
+
+**Verdict 10 Go/mo :**
+
+| Config | Tient ? |
+|--------|---------|
+| Poll 5 min + rafales 8 h/j + blocage assets | **Oui, juste** (~9–10 Go) |
+| Poll 3 min ou 24/7 sans rafales | **Non** → viser **25–50 Go** |
+| Mac local sans proxy | **Illimité** (pas de compteur Webshare) |
+
+Surveille Webshare dashboard la 1ère semaine ; si >70 % du quota à mi-mois, passe poll **6–8 min** ou OFF plus long.
+
+## E — Test Mac 48 h (baseline sans proxy)
+
+À lancer **en parallèle** de la config Railway — compare le taux de blocage sur IP box vs cloud.
+
+```bash
+cd /chemin/vers/bot-vinted
+# .env local : DATABASE_URL (Postgres Railway), DISCORD_*, pas de SCRAPE_PROXY_URLS
+uv run vinted-bot scrape --loop
+```
+
+**Checklist 48 h :**
+
+| Métrique | OK | Problème |
+|----------|-----|----------|
+| Logs `catalog_fetch_failed` 403 | rare / 0 | fréquent → IP ou comportement |
+| Logs `402` | absent | N/A sans proxy |
+| `brand_worker_target_done` | régulier | silence >5 min |
+| Salons Discord | annonces fraîches | vide |
+
+Si **403 fréquents même en local** avec poll ≥2 min → ce n’est pas l’IP Railway ; revoir fréquence ou session.  
+Si **local OK, Railway KO sans proxy** → proxy résidentiel nécessaire en cloud (normal).
 
 ## D — 24/7 Railway pro
 

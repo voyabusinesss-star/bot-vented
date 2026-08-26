@@ -377,10 +377,13 @@ class BrandWorker:
         if pos < on_s:
             return
         wait = period - pos
+        # OFF = arrêt Chromium complet (pas de keep-alive proxy/RAM).
+        self._close_browser()
         log.info(
             "brand_worker_burst_off",
             worker_id=self.worker_id,
             sleep_seconds=round(wait, 1),
+            browser_closed=True,
         )
         self._backoff_until = time.monotonic() + wait
         remaining = wait

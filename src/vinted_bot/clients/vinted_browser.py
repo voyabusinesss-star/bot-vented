@@ -23,6 +23,30 @@ log = get_logger(__name__)
 DEFAULT_BASE_URL = "https://www.vinted.fr"
 _CALL_TIMEOUT_S = 55.0
 
+_BLOCKED_RESOURCE_TYPES = frozenset({"image", "font", "stylesheet", "media"})
+_BLOCKED_URL_FRAGMENTS = (
+    "google-analytics",
+    "googletagmanager",
+    "doubleclick",
+    "facebook.net",
+    "hotjar",
+    "segment.io",
+    "sentry.io",
+    "datadoghq",
+    "fullstory",
+    "clarity.ms",
+    "adservice",
+    "adsystem",
+)
+
+
+def should_block_bandwidth_request(resource_type: str, url: str) -> bool:
+    """True → abort route (warm-up navigateur — pas les appels API JSON)."""
+    if resource_type in _BLOCKED_RESOURCE_TYPES:
+        return True
+    lower = (url or "").lower()
+    return any(fragment in lower for fragment in _BLOCKED_URL_FRAGMENTS)
+
 
 class CatalogFetchBlockedError(RuntimeError):
     """Catalogue Vinted inaccessible (403/402 proxy, rate-limit, quota)."""
@@ -304,6 +328,26 @@ class VintedBrowser:
         apply_vinted_stealth(self._context)
         self._page = self._context.new_page()
         self._page.set_default_timeout(self.timeout_ms)
+        self._install_bandwidth_saver_routes()
+
+    def _install_bandwidth_saver_routes(self) -> None:
+        """page.route — bloque assets lourds sur warm-up (fonts/images/CSS/analytics)."""
+        from vinted_bot.config import get_settings
+
+        if self._context is None:
+            return
+        if not bool(getattr(get_settings(), "scrape_block_heavy_resources", True)):
+            return
+
+        def _handle_route(route: Any) -> None:
+            req = route.request
+            if should_block_bandwidth_request(str(req.resource_type), str(req.url)):
+                route.abort()
+            else:
+                route.continue_()
+
+        self._context.route("**/*", _handle_route)
+        log.info("browser_bandwidth_saver_enabled")
 
     def _stop_impl(self) -> None:
         try:
