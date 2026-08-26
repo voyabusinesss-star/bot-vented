@@ -39,7 +39,12 @@ def test_requeue_retryable_failed_outbox(mock_scope: MagicMock) -> None:
     mock_scope.return_value.__enter__.return_value = session
     row = MagicMock()
     row.status = OUTBOX_STATUS_FAILED
+    row.listing_id = 1
+    row.channel_id = "123"
+    row.kind = "brand"
+    row.id = 99
     session.scalars.return_value.all.return_value = [row]
+    session.scalar.return_value = None
 
     count = requeue_retryable_failed_outbox(retry_after_seconds=60.0, limit=10)
 

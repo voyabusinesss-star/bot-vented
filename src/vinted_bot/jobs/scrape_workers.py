@@ -9,6 +9,7 @@ from __future__ import annotations
 import random
 import threading
 import time
+from dataclasses import dataclass
 from typing import Sequence
 
 from vinted_bot.clients.vinted_browser import (
@@ -31,7 +32,7 @@ from vinted_bot.services.scrape_heartbeat import (
     read_scrape_heartbeat,
     write_scrape_heartbeat,
 )
-from vinted_bot.services.scrape_search import scrape_search_once
+from vinted_bot.services.scrape_search import ScrapeActivitySignal, scrape_search_once
 from vinted_bot.utils.logging import get_logger
 from vinted_bot.utils.proxy import assign_proxy_for_worker, rotate_proxy
 
@@ -116,17 +117,16 @@ def partition_targets(
     targets: Sequence[SearchTarget],
     n_workers: int,
 ) -> list[list[SearchTarget]]:
-    """Répartit les cibles en groupes sticky équilibrés (pas de file low en fin)."""
+    """Répartit les cibles en groupes sticky équilibrés (ordre YAML, pas alphabétique)."""
     n = max(1, int(n_workers))
-    # Round-robin pur sur liste triée marque — chaque salon a une place équitable
-    ordered = sorted(
-        targets,
-        key=lambda t: (
-            t.brand,
-            t.query,
-            tuple(t.catalog_ids),
-        ),
+    indexed = list(enumerate(targets))
+    indexed.sort(
+        key=lambda pair: (
+            PRIORITY_RANK.get(pair[1].priority, 9),
+            pair[0],
+        )
     )
+    ordered = [target for _, target in indexed]
     buckets: list[list[SearchTarget]] = [[] for _ in range(n)]
     for i, target in enumerate(ordered):
         buckets[i % n].append(target)
@@ -137,11 +137,79 @@ def _target_key(target: SearchTarget) -> tuple[str, str, tuple[int, ...]]:
     return (target.brand, target.query, tuple(target.catalog_ids))
 
 
+@dataclass(frozen=True, slots=True)
+class TargetActivity:
+    """Dernière activité Vinted observée pour une cible scrape."""
+
+    newest_age_s: float | None = None
+    oldest_age_s: float | None = None
+    page_saturated: bool = False
+    items_created: int = 0
+    updated_at: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class ScrapeTargetOutcome:
+    created: int
+    posted: int
+    found: int
+    skipped_deal: int
+    activity: ScrapeActivitySignal | None = None
+
+
+def _activity_hotness(
+    activity: TargetActivity | None,
+    *,
+    now: float,
+) -> float:
+    """Score élevé = flux Vinted actif (annonces récentes sur page 1).
+
+    Les marques jamais sondees ont un score bas : une marque chaude déjà vue
+    repasse devant au lieu d'enchaîner toutes les marques une par une.
+    """
+    if activity is None or activity.updated_at <= 0:
+        return 50.0
+    elapsed = max(0.0, now - activity.updated_at)
+    score = 0.0
+    if activity.newest_age_s is not None:
+        effective_newest = activity.newest_age_s + elapsed
+        score += max(0.0, 600.0 - effective_newest)
+    if activity.page_saturated and activity.oldest_age_s is not None:
+        effective_oldest = activity.oldest_age_s + elapsed
+        score += max(0.0, 300.0 - effective_oldest)
+    score += activity.items_created * 40.0
+    return score
+
+
+def _adaptive_poll_interval(
+    target: SearchTarget,
+    signal: ScrapeActivitySignal | None,
+) -> float:
+    """Raccourcit le délai si page 1 Vinted est saturée d'annonces fraîches."""
+    base = target_poll_interval_seconds(target)
+    if signal is None:
+        return base
+    if signal.page_saturated and signal.oldest_age_seconds is not None:
+        age = signal.oldest_age_seconds
+        if age < 30:
+            return min(base, 3.0)
+        if age < 90:
+            return min(base, max(4.0, base * 0.5))
+    if (
+        signal.newest_age_seconds is not None
+        and signal.newest_age_seconds > 900
+        and not signal.page_saturated
+    ):
+        return min(base * 1.5, base + 30.0)
+    return base
+
+
 def _pick_due_target(
     targets: Sequence[SearchTarget],
     next_run: dict[tuple[str, str, tuple[int, ...]], float],
     *,
     now: float,
+    activity: dict[tuple[str, str, tuple[int, ...]], TargetActivity] | None = None,
 ) -> SearchTarget | None:
     due: list[tuple[float, SearchTarget]] = []
     for target in targets:
@@ -151,20 +219,21 @@ def _pick_due_target(
             due.append((when, target))
     if not due:
         return None
-    # Urgence pondérée : high plus souvent, sans affamer medium/low (CDG, Dr Martens…)
     weight = {"high": 2.5, "medium": 1.15, "low": 0.7}
+    act_map = activity or {}
 
-    def _urgency(item: tuple[float, SearchTarget]) -> float:
+    def _score(item: tuple[float, SearchTarget]) -> float:
         when, target = item
         overdue = max(0.0, now - when)
-        return overdue * weight.get(target.priority, 1.0)
+        pri = weight.get(target.priority, 1.0)
+        hot = _activity_hotness(act_map.get(_target_key(target)), now=now)
+        return overdue * pri + hot
 
     due.sort(
         key=lambda item: (
-            -_urgency(item),
+            -_score(item),
             PRIORITY_RANK.get(item[1].priority, 9),
-            item[1].brand,
-            item[1].query,
+            hash(_target_key(item[1])) & 0xFFFF,
         )
     )
     return due[0][1]
@@ -205,8 +274,8 @@ def _scrape_target(
     browser: VintedBrowser,
     headless: bool,
     max_items: int | None,
-) -> tuple[int, int, int, int]:
-    """Retourne (created, posted, found, skipped_deal)."""
+) -> ScrapeTargetOutcome:
+    """Scrape une cible marque/filtre et retourne stats + signal activité Vinted."""
     searches_cfg = load_searches_config()
     policy = resolve_policy(target, searches_cfg.priorities)
     per_search = max_items or policy.max_items or searches_cfg.max_items
@@ -250,11 +319,12 @@ def _scrape_target(
         keep_search_text=keep_text,
         defer_discord=not is_user_filter,
     )
-    return (
-        result.items_created,
-        result.items_posted_discord,
-        result.items_found,
-        result.items_skipped_deal,
+    return ScrapeTargetOutcome(
+        created=result.items_created,
+        posted=result.items_posted_discord,
+        found=result.items_found,
+        skipped_deal=result.items_skipped_deal,
+        activity=result.activity,
     )
 
 
@@ -295,6 +365,9 @@ class BrandWorker:
         self._next_run: dict[tuple[str, str, tuple[int, ...]], float] = {
             _target_key(t): 0.0 for t in self.targets
         }
+        self._target_activity: dict[
+            tuple[str, str, tuple[int, ...]], TargetActivity
+        ] = {}
         self._last_scrape_at: dict[tuple[str, str, tuple[int, ...]], float] = {}
         self._revisit_samples: list[float] = []
         self._last_activity = time.monotonic()
@@ -494,12 +567,16 @@ class BrandWorker:
                 break
             started = time.monotonic()
             try:
-                created, posted, found, skipped = _scrape_target(
+                outcome = _scrape_target(
                     ftarget,
                     browser=browser,
                     headless=self.headless,
                     max_items=self.max_items,
                 )
+                created = outcome.created
+                posted = outcome.posted
+                found = outcome.found
+                skipped = outcome.skipped_deal
                 self._touch()
                 log.info(
                     "brand_worker_filter_injected",
@@ -526,12 +603,14 @@ class BrandWorker:
                 self._close_browser()
                 browser = self._ensure_browser()
                 try:
-                    created, posted, found, skipped = _scrape_target(
+                    outcome = _scrape_target(
                         ftarget,
                         browser=browser,
                         headless=self.headless,
                         max_items=self.max_items,
                     )
+                    created = outcome.created
+                    found = outcome.found
                     self._touch()
                     log.info(
                         "brand_worker_filter_injected_retry",
@@ -578,7 +657,12 @@ class BrandWorker:
             try:
                 browser = self._ensure_browser()
                 now = time.monotonic()
-                target = _pick_due_target(self.targets, self._next_run, now=now)
+                target = _pick_due_target(
+                    self.targets,
+                    self._next_run,
+                    now=now,
+                    activity=self._target_activity,
+                )
                 if target is None:
                     wait_s = _seconds_until_next(
                         self.targets, self._next_run, now=now
@@ -590,13 +674,18 @@ class BrandWorker:
                 started = time.monotonic()
                 last = self._last_scrape_at.get(key)
                 seconds_since = (started - last) if last is not None else None
+                outcome: ScrapeTargetOutcome | None = None
                 try:
-                    created, posted, found, skipped = _scrape_target(
+                    outcome = _scrape_target(
                         target,
                         browser=browser,
                         headless=self.headless,
                         max_items=self.max_items,
                     )
+                    created = outcome.created
+                    posted = outcome.posted
+                    found = outcome.found
+                    skipped = outcome.skipped_deal
                     self._touch()
                     cycle_created += created
                     cycle_posted += posted
@@ -604,6 +693,14 @@ class BrandWorker:
                     cycle_skipped += skipped
                     self._successes += 1
                     self._last_scrape_at[key] = time.monotonic()
+                    if outcome.activity is not None:
+                        self._target_activity[key] = TargetActivity(
+                            newest_age_s=outcome.activity.newest_age_seconds,
+                            oldest_age_s=outcome.activity.oldest_age_seconds,
+                            page_saturated=outcome.activity.page_saturated,
+                            items_created=created,
+                            updated_at=time.monotonic(),
+                        )
                     if seconds_since is not None:
                         self._revisit_samples.append(float(seconds_since))
                         if len(self._revisit_samples) >= 20:
@@ -619,6 +716,7 @@ class BrandWorker:
                                 p95_seconds=round(p95, 1),
                                 n=n,
                             )
+                    act = self._target_activity.get(key)
                     log.info(
                         "brand_worker_target_done",
                         worker_id=self.worker_id,
@@ -634,6 +732,12 @@ class BrandWorker:
                         posted=posted,
                         found=found,
                         skipped_deal=skipped,
+                        newest_age_seconds=(
+                            round(act.newest_age_s, 1)
+                            if act and act.newest_age_s is not None
+                            else None
+                        ),
+                        page_saturated=act.page_saturated if act else None,
                     )
                 except Exception as exc:  # noqa: BLE001
                     self._touch()
@@ -661,7 +765,10 @@ class BrandWorker:
                         continue
                     self._touch()
 
-                interval = target_poll_interval_seconds(target)
+                interval = _adaptive_poll_interval(
+                    target,
+                    outcome.activity if outcome is not None else None,
+                )
                 self._next_run[key] = time.monotonic() + interval
 
                 # Filtres privés : 1–2 requêtes intercalées (même Chromium, pas de 2e process)
@@ -949,6 +1056,12 @@ def run_permanent_scrape_pool(
         while True:
             time.sleep(20.0)
             _check_scrape_silence(silence_after=silence_after)
+            try:
+                from vinted_bot.services.railway_redeploy import maybe_auto_redeploy_on_403
+
+                maybe_auto_redeploy_on_403()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("scrape_auto_redeploy_check_failed", error=str(exc)[:160])
             # Au-dessus du backoff proxy (600 s) + marge catalog (~55 s × retries).
             stuck_after = 900.0
             for idx, w in enumerate(list(brand_workers)):

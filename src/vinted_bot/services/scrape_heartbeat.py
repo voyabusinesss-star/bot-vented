@@ -14,9 +14,16 @@ HEARTBEAT_PATH = Path(
 
 
 def write_scrape_heartbeat(**fields: Any) -> None:
+    try:
+        from vinted_bot.services.scrape_block_tracker import tracker_snapshot
+
+        block_fields = tracker_snapshot()
+    except Exception:  # noqa: BLE001
+        block_fields = {}
     payload = {
         "ts": time.time(),
         "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        **block_fields,
         **{k: v for k, v in fields.items() if v is not None},
     }
     try:

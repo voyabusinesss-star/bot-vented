@@ -308,6 +308,13 @@ def target_poll_interval_seconds(
     priorities: dict[str, PriorityPolicy] | None = None,
 ) -> float:
     """Secondes entre deux scrapes de la même cible (planning indépendant)."""
+    from vinted_bot.config import get_settings
+
+    settings = get_settings()
+    if settings.scrape_fast_mode:
+        fast = {"high": 0.5, "medium": 2.0, "low": 5.0}
+        return max(0.3, float(fast.get(target.priority, 2.0)))
+
     policies = priorities or load_searches_config().priorities
     policy = resolve_policy(target, policies)
     raw = policy.poll_interval_seconds

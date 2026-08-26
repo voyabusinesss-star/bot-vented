@@ -188,6 +188,15 @@ class Settings(BaseSettings):
     scrape_block_heavy_resources: bool = True
     # Proxies HTTP/SOCKS (CSV ou lignes) — 1 sticky par worker, rotation au recycle
     scrape_proxy_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    # Poll rapide par marque (0.5/2/5 s) — override searches.yaml poll_interval_seconds
+    scrape_fast_mode: bool = False
+    # Auto-redeploy Railway sur 403 Vinted (sans proxy)
+    scrape_auto_redeploy_enabled: bool = False
+    scrape_403_redeploy_threshold: int = Field(default=8, ge=1, le=100)
+    scrape_auto_redeploy_cooldown_seconds: float = Field(default=1800.0, ge=300.0)
+    railway_api_token: str = ""
+    railway_service_id: str = ""
+    railway_environment_id: str = ""
 
     @field_validator("scrape_proxy_urls", mode="before")
     @classmethod
@@ -266,6 +275,8 @@ class Settings(BaseSettings):
 
     # Salon regroupement (#all-vetement)
     discord_channel_all: str = ""
+    # Dupliquer les annonces salon marque → #all-vetement (1× marque + 1× ALL, pas 2× même salon)
+    discord_mirror_all_vetement: bool = True
     discord_channel_logs: str = ""
     # Hébergement technique du xlsx catalogue (salon admin, jamais le détecteur public)
     discord_channel_catalog_host: str = ""
@@ -397,7 +408,7 @@ class Settings(BaseSettings):
     # Railway injecte PORT — prioritaire pour exposer le webhook en HTTPS
     port: int | None = Field(default=None, ge=1, le=65535)
     # Délai minimal entre posts Discord (évite 429 sans ralentir le scrape)
-    discord_post_delay_seconds: float = Field(default=0.0, ge=0.0)
+    discord_post_delay_seconds: float = Field(default=0.5, ge=0.0)
     # Salon aperçu bot — flux public ralenti (sans boutons achat/négociation)
     discord_channel_bot_preview: str = ""
     # Intervalle mini entre 2 pings aperçu (secondes) — défaut ~2,5 min

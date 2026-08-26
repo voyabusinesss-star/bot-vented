@@ -107,6 +107,46 @@ uv run vinted-bot scrape --loop
 Si **403 fréquents même en local** avec poll ≥2 min → ce n’est pas l’IP Railway ; revoir fréquence ou session.  
 Si **local OK, Railway KO sans proxy** → proxy résidentiel nécessaire en cloud (normal).
 
+## F — Railway direct sans proxy + auto-redeploy 403
+
+Mode « IP datacenter Railway » sans Webshare. Le scrape repart seul après redeploy (`railway-entrypoint.sh` → `scrape --loop`).
+
+**Variables `bot-scrape`** (profil complet : `docs/railway-scrape-channels.env`) :
+
+```env
+SCRAPE_PROXY_URLS=
+SCRAPE_FAST_MODE=1
+SCRAPE_POLL_SECONDS_MIN=0.3
+SCRAPE_POLL_SECONDS_MAX=0.8
+REQUEST_DELAY_SECONDS=0.5
+SCRAPE_BURST_ON_SECONDS=0
+SCRAPE_BURST_OFF_SECONDS=0
+SCRAPE_AUTO_REDEPLOY_ENABLED=1
+SCRAPE_403_REDEPLOY_THRESHOLD=8
+SCRAPE_AUTO_REDEPLOY_COOLDOWN_SECONDS=1800
+```
+
+**Limites :** le redeploy change d’hôte Railway, pas garanti une nouvelle IP egress. Si >2–3 redeploys/h sans posts → repasser proxy résidentiel FR.
+
+### Token Railway (auto-redeploy)
+
+1. Railway → **Project** → **Settings** → **Tokens** → **Create Project Token** (droits deploy).
+2. Récupérer `serviceId` et `environmentId` :
+   - URL dashboard du service `bot-scrape`, ou
+   - `railway status --json` (depuis le repo lié).
+3. Coller **uniquement sur `bot-scrape`** (jamais sur `bot-vented` public) :
+
+```env
+RAILWAY_API_TOKEN=<project-token>
+RAILWAY_SERVICE_ID=<uuid>
+RAILWAY_ENVIRONMENT_ID=<uuid>
+```
+
+4. Désactiver **Static Outbound IPs** sur `bot-scrape`.
+5. Sur Mac local : `ENABLE_SCRAPE=0` pour une seule source de posts.
+
+**Observabilité :** heartbeat `consecutive_403`, logs `scrape_403_threshold_reached`, `railway_redeploy_triggered`, alerte Discord `#logs`.
+
 ## D — 24/7 Railway pro
 
 1. Webshare **Sticky FR** 10–50 Go/mo (endpoint `-fr`, pas `-rotate`)

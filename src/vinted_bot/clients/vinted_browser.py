@@ -506,6 +506,12 @@ class VintedBrowser:
         if result is not None:
             self._last_catalog_http_blocked = False
             self._proxy_bandwidth_exhausted = False
+            try:
+                from vinted_bot.services.scrape_block_tracker import record_catalog_success
+
+                record_catalog_success()
+            except Exception:  # noqa: BLE001
+                pass
             return result
         # 403/429 : ne pas retomber sur evaluate (crash Chromium + spiral force_stop)
         if getattr(self, "_last_catalog_http_blocked", False):
@@ -548,6 +554,16 @@ class VintedBrowser:
                     self._last_catalog_http_blocked = True
                     self._proxy_bandwidth_exhausted = proxy_exhausted
                     self.rate_limiter.penalize(penalty)
+                    try:
+                        from vinted_bot.services.scrape_block_tracker import (
+                            record_catalog_blocked,
+                        )
+
+                        record_catalog_blocked(
+                            status=status, proxy_exhausted=proxy_exhausted
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                     log.warning(
                         "catalog_rate_limit_backoff",
                         status=status,

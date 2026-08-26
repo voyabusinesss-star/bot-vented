@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from vinted_bot.config_loader import SearchTarget, target_poll_interval_seconds
 from vinted_bot.jobs.scrape_workers import _pick_due_target, _target_key
@@ -155,6 +156,41 @@ def test_scheduler_picks_due_independently_of_list_order() -> None:
     assert picked.brand == "nike"
 
 
+def test_scheduler_prefers_hot_vinted_market_over_alphabet() -> None:
+    from vinted_bot.jobs.scrape_workers import TargetActivity, _target_key
+
+    targets = [
+        SearchTarget(brand="acne studios", query="acne studios", priority="high"),
+        SearchTarget(brand="nike", query="nike", priority="high"),
+    ]
+    now = 2000.0
+    next_run = {_target_key(t): now - 5.0 for t in targets}
+    activity = {
+        _target_key(targets[0]): TargetActivity(
+            newest_age_s=420.0,
+            oldest_age_s=900.0,
+            page_saturated=False,
+            items_created=0,
+            updated_at=now,
+        ),
+        _target_key(targets[1]): TargetActivity(
+            newest_age_s=12.0,
+            oldest_age_s=45.0,
+            page_saturated=True,
+            items_created=3,
+            updated_at=now,
+        ),
+    }
+    picked = _pick_due_target(
+        list(reversed(targets)),
+        next_run,
+        now=now,
+        activity=activity,
+    )
+    assert picked is not None
+    assert picked.brand == "nike"
+
+
 def test_target_poll_interval_priority_and_override() -> None:
     high = SearchTarget(brand="nike", query="nike", priority="high")
     medium = SearchTarget(brand="lacoste", query="lacoste", priority="medium")
@@ -164,6 +200,19 @@ def test_target_poll_interval_priority_and_override() -> None:
     assert target_poll_interval_seconds(high) == 8.0
     assert target_poll_interval_seconds(medium) == 15.0
     assert target_poll_interval_seconds(hot) == 1.0
+
+
+@patch("vinted_bot.config.get_settings")
+def test_target_poll_interval_fast_mode(mock_settings) -> None:
+    from vinted_bot.config import Settings
+
+    mock_settings.return_value = Settings(scrape_fast_mode=True)
+    high = SearchTarget(brand="nike", query="nike", priority="high")
+    medium = SearchTarget(brand="lacoste", query="lacoste", priority="medium")
+    low = SearchTarget(brand="x", query="x", priority="low")
+    assert target_poll_interval_seconds(high) == 0.5
+    assert target_poll_interval_seconds(medium) == 2.0
+    assert target_poll_interval_seconds(low) == 5.0
 
 
 def test_outbox_drip_cap_selects_newest_global() -> None:

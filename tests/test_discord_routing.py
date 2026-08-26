@@ -136,15 +136,30 @@ def test_nike_clothing_vs_sneakers_routing() -> None:
         )
         is False
     )
-    # Salon vêtement classique Nike → OK
+
+
+def test_mirror_all_enabled_by_default() -> None:
+    from vinted_bot.config import Settings
+    from vinted_bot.notify.discord import should_mirror_listing_to_all_vetement
+
+    settings = Settings(
+        discord_channel_all="1529532431357444136",
+        discord_mirror_all_vetement=True,
+    )
+    assert should_mirror_listing_to_all_vetement(
+        "Nike",
+        is_shoe=False,
+        brand_channel_id="1529532275635519718",
+        settings=settings,
+    )
+    settings_off = settings.model_copy(update={"discord_mirror_all_vetement": False})
     assert (
-        belongs_in_all_vetement(
+        should_mirror_listing_to_all_vetement(
             "Nike",
             is_shoe=False,
-            brand_channel_id="111",
-            sneaker_channel_ids=sneaker_ids,
+            brand_channel_id="1529532275635519718",
+            settings=settings_off,
         )
-        is True
+        is False
     )
-
 

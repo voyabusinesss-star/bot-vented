@@ -31,6 +31,12 @@ OUTBOX_STATUS_SKIPPED = "skipped"
 KIND_BRAND = "brand"
 KIND_ALL = "all"
 KIND_PREVIEW = "preview"
+_OUTBOX_DEDUP_STATUSES = (
+    OUTBOX_STATUS_PENDING,
+    OUTBOX_STATUS_FAILED,
+    OUTBOX_STATUS_SENT,
+)
+_MIN_DISCORD_POST_DELAY_SECONDS = 0.45
 
 
 def _max_listing_age_minutes() -> int | None:
@@ -103,12 +109,12 @@ def resolve_discord_channels(listing: Listing) -> tuple[str | None, str | None, 
     """Retourne (brand_channel_id, all_channel_id_or_none, is_shoe)."""
     from vinted_bot.notify.discord import (
         all_vetement_mirror_exclude_channels,
-        belongs_in_all_vetement,
         channel_allows_listing,
         get_deal_evaluation,
         listing_is_shoe,
         route_channel,
         sanitize_discord_channel_id,
+        should_mirror_listing_to_all_vetement,
     )
 
     settings = get_settings()
@@ -134,33 +140,71 @@ def resolve_discord_channels(listing: Listing) -> tuple[str | None, str | None, 
         return None, None, is_shoe
 
     all_channel = sanitize_discord_channel_id(settings.discord_channel_all)
-    # Indémodables → toujours mirror ALL (sacs/accessoires inclus)
-    mirror_all = (
-        bool(all_channel)
-        and all_channel != brand_channel_id
-        and belongs_in_all_vetement(
-            listing.brand,
-            is_shoe=is_shoe,
-            brand_channel_id=brand_channel_id,
-            sneaker_channel_ids=sneaker_ids,
-            exclude_brand_channel_ids=all_vetement_mirror_exclude_channels(settings),
-        )
+    mirror_all = should_mirror_listing_to_all_vetement(
+        listing.brand,
+        is_shoe=is_shoe,
+        brand_channel_id=brand_channel_id,
+        sneaker_channel_ids=sneaker_ids,
+        exclude_brand_channel_ids=all_vetement_mirror_exclude_channels(settings),
+        settings=settings,
     )
     return brand_channel_id, (all_channel if mirror_all else None), is_shoe
 
 
-def pending_brand_listing_ids(listing_ids: Sequence[int]) -> set[int]:
-    """Listings déjà en file brand (évite de re-sélectionner avant flush)."""
+def listing_ids_with_inflight_outbox(listing_ids: Sequence[int]) -> set[int]:
+    """Listings avec outbox brand/all pending ou failed (anti double enqueue)."""
     if not listing_ids:
         return set()
     with session_scope() as session:
         rows = session.scalars(
             select(DiscordOutbox.listing_id)
             .where(DiscordOutbox.listing_id.in_(list(listing_ids)))
-            .where(DiscordOutbox.kind == KIND_BRAND)
-            .where(DiscordOutbox.status == OUTBOX_STATUS_PENDING)
+            .where(DiscordOutbox.kind.in_([KIND_BRAND, KIND_ALL]))
+            .where(
+                DiscordOutbox.status.in_(
+                    [OUTBOX_STATUS_PENDING, OUTBOX_STATUS_FAILED]
+                )
+            )
         ).all()
     return set(int(x) for x in rows)
+
+
+def pending_brand_listing_ids(listing_ids: Sequence[int]) -> set[int]:
+    """Alias — pending/failed brand + all."""
+    return listing_ids_with_inflight_outbox(listing_ids)
+
+
+def _listing_discord_outbox_settled(session: Any, listing_id: int) -> bool:
+    """Plus de file brand/all en attente pour cette annonce."""
+    busy = session.scalar(
+        select(DiscordOutbox.id)
+        .where(DiscordOutbox.listing_id == listing_id)
+        .where(DiscordOutbox.kind.in_([KIND_BRAND, KIND_ALL]))
+        .where(
+            DiscordOutbox.status.in_([OUTBOX_STATUS_PENDING, OUTBOX_STATUS_FAILED])
+        )
+        .limit(1)
+    )
+    return not busy
+
+
+def _outbox_row_exists(
+    session: Any,
+    *,
+    listing_id: int,
+    channel_id: str,
+    kind: str,
+) -> bool:
+    """True si cette annonce a déjà une row outbox (pending, failed ou sent)."""
+    exists = session.scalar(
+        select(DiscordOutbox.id)
+        .where(DiscordOutbox.listing_id == listing_id)
+        .where(DiscordOutbox.channel_id == channel_id)
+        .where(DiscordOutbox.kind == kind)
+        .where(DiscordOutbox.status.in_(_OUTBOX_DEDUP_STATUSES))
+        .limit(1)
+    )
+    return bool(exists)
 
 
 def enqueue_listings_for_discord(listings: Sequence[Listing]) -> list[int]:
@@ -193,15 +237,12 @@ def enqueue_listings_for_discord(listings: Sequence[Listing]) -> list[int]:
                 continue
 
             def _enqueue(channel_id: str, kind: str) -> bool:
-                exists = session.scalar(
-                    select(DiscordOutbox.id)
-                    .where(DiscordOutbox.listing_id == listing.id)
-                    .where(DiscordOutbox.channel_id == channel_id)
-                    .where(DiscordOutbox.kind == kind)
-                    .where(DiscordOutbox.status == OUTBOX_STATUS_PENDING)
-                    .limit(1)
-                )
-                if exists:
+                if _outbox_row_exists(
+                    session,
+                    listing_id=int(listing.id),
+                    channel_id=channel_id,
+                    kind=kind,
+                ):
                     return False
                 session.add(
                     DiscordOutbox(
@@ -253,13 +294,14 @@ def enqueue_bot_preview_from_candidates(
         return False
 
     interval = float(getattr(cfg, "bot_preview_interval_seconds", 150.0) or 150.0)
-    now = time.monotonic()
-    last_at = float(getattr(discord_preview, "_last_bot_preview_post_at", 0.0) or 0.0)
-    if last_at and (now - last_at) < interval:
+    mono_now = time.monotonic()
+    last_raw = getattr(discord_preview, "_last_bot_preview_post_at", 0.0) or 0.0
+    last_at = float(last_raw) if isinstance(last_raw, (int, float)) else 0.0
+    if last_at and (mono_now - last_at) < interval:
         log.info(
             "discord_bot_preview_skipped",
             reason="interval",
-            wait_seconds=round(interval - (now - last_at), 1),
+            wait_seconds=round(interval - (mono_now - last_at), 1),
             candidates=len(candidates),
         )
         return False
@@ -280,8 +322,8 @@ def enqueue_bot_preview_from_candidates(
         log.info("discord_bot_preview_skipped", reason="no_candidate")
         return False
 
-    now = _utcnow()
-    published = _as_aware(listing.published_at) or _as_aware(listing.first_seen_at) or now
+    utc_now = _utcnow()
+    published = _as_aware(listing.published_at) or _as_aware(listing.first_seen_at) or utc_now
     if _is_stale_published_at(published, _max_listing_age_minutes()):
         log.info(
             "discord_bot_preview_skipped",
@@ -307,12 +349,12 @@ def enqueue_bot_preview_from_candidates(
                 listing_id=listing.id,
                 channel_id=channel_id,
                 published_at=published,
-                enqueued_at=now,
+                enqueued_at=utc_now,
                 status=OUTBOX_STATUS_PENDING,
                 kind=KIND_PREVIEW,
             )
         )
-    discord_preview._last_bot_preview_post_at = now
+    discord_preview._last_bot_preview_post_at = mono_now
     brand = discord_preview._preview_brand_key(listing)
     tag = (
         f"{'shoe' if discord_preview._preview_is_shoe(listing) else 'cloth'}:{brand}"
@@ -356,6 +398,18 @@ def requeue_retryable_failed_outbox(
             ).all()
         )
         for row in rows:
+            already_sent = session.scalar(
+                select(DiscordOutbox.id)
+                .where(DiscordOutbox.listing_id == row.listing_id)
+                .where(DiscordOutbox.channel_id == row.channel_id)
+                .where(DiscordOutbox.kind == row.kind)
+                .where(DiscordOutbox.status == OUTBOX_STATUS_SENT)
+                .where(DiscordOutbox.id != row.id)
+                .limit(1)
+            )
+            if already_sent:
+                row.status = OUTBOX_STATUS_SKIPPED
+                continue
             row.status = OUTBOX_STATUS_PENDING
             requeued += 1
     if requeued:
@@ -520,10 +574,12 @@ def flush_discord_outbox(
     if not payload_jobs:
         return 0
 
-    posted_listing_ids: list[int] = []
     sent_row_ids: list[int] = []
     failed_row_ids: list[int] = []
     delay = float(settings.discord_post_delay_seconds or 0.0)
+    if delay <= 0:
+        # delay=0 → rafales 429 → failed requeue → doublons salon
+        delay = _MIN_DISCORD_POST_DELAY_SECONDS
 
     with DiscordNotifier(settings) as notifier:
         for index, (
@@ -539,8 +595,6 @@ def flush_discord_outbox(
             try:
                 notifier.post_message(channel_id, payload)
                 sent_row_ids.append(row_id)
-                if kind == KIND_BRAND:
-                    posted_listing_ids.append(listing_id)
                 log.info(
                     "discord_outbox_sent",
                     outbox_id=row_id,
@@ -581,8 +635,20 @@ def flush_discord_outbox(
                 select(DiscordOutbox).where(DiscordOutbox.id.in_(failed_row_ids))
             ).all():
                 row.status = OUTBOX_STATUS_FAILED
-        if posted_listing_ids:
-            mark_discord_posted(session, posted_listing_ids)
+        if sent_row_ids:
+            sent_rows = list(
+                session.scalars(
+                    select(DiscordOutbox).where(DiscordOutbox.id.in_(sent_row_ids))
+                ).all()
+            )
+            settled_ids = {
+                int(row.listing_id)
+                for row in sent_rows
+                if row.kind in (KIND_BRAND, KIND_ALL)
+                and _listing_discord_outbox_settled(session, int(row.listing_id))
+            }
+            if settled_ids:
+                mark_discord_posted(session, list(settled_ids))
 
     log.info(
         "discord_outbox_drip",

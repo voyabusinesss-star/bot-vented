@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Sequence
 
 from vinted_bot.clients.vinted_browser import VintedBrowser, vinted_browser
@@ -36,6 +37,45 @@ from vinted_bot.utils.retry import retry_call
 log = get_logger(__name__)
 
 
+def published_age_seconds(published_at: datetime | None) -> float | None:
+    """Âge en secondes d'une annonce Vinted (None si date inconnue)."""
+    if published_at is None:
+        return None
+    try:
+        pub = published_at
+        if pub.tzinfo is None:
+            pub = pub.replace(tzinfo=timezone.utc)
+        return max(0.0, (datetime.now(timezone.utc) - pub).total_seconds())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class ScrapeActivitySignal:
+    """Fraîcheur du flux Vinted sur la dernière page scrapée."""
+
+    newest_age_seconds: float | None = None
+    oldest_age_seconds: float | None = None
+    page_saturated: bool = False
+
+
+def activity_signal_from_page(
+    items: Sequence[SearchItem],
+    *,
+    max_items: int,
+) -> ScrapeActivitySignal:
+    """Dérive l'activité temps réel depuis une page catalog triée newest_first."""
+    if not items:
+        return ScrapeActivitySignal()
+    newest = published_age_seconds(items[0].published_at)
+    oldest = published_age_seconds(items[-1].published_at)
+    return ScrapeActivitySignal(
+        newest_age_seconds=newest,
+        oldest_age_seconds=oldest,
+        page_saturated=len(items) >= max(1, max_items),
+    )
+
+
 def listing_discord_sort_key(listing: Any) -> tuple[float, int]:
     """Ordre d'envoi Discord : published_at DESC (plus récent d'abord)."""
     for attr in (
@@ -64,6 +104,7 @@ class ScrapeSearchResult:
     bootstrap: bool = False
     scrape_run_id: int = 0
     items: list[SearchItem] = field(default_factory=list)
+    activity: ScrapeActivitySignal | None = None
 
 
 def _checkpoint_key(query: str) -> str:
@@ -125,12 +166,13 @@ def scrape_search_once(
     upserted = 0
     skipped_brand = 0
     created_vinted_ids: list[int] = []
+    activity_signal: ScrapeActivitySignal | None = None
     # Filtres privés : pas de bootstrap silencieux (sinon aucune alerte DM au 1er passage)
     bootstrap = (not keep_search_text) and (not _is_bootstrapped(query))
 
     try:
         def _run_with_browser(active: VintedBrowser) -> None:
-            nonlocal items, skipped_brand, created_count, upserted, created_vinted_ids
+            nonlocal items, skipped_brand, created_count, upserted, created_vinted_ids, activity_signal
 
             # YAML marque seule (query≈brand + brand_ids) : search_text vide.
             # Filtres privés : garder le texte (TN, mot-clé…) même avec brand_ids.
@@ -201,21 +243,10 @@ def scrape_search_once(
                 bootstrap=bootstrap,
                 order=order,
             )
-            if len(raw_items) >= max_items and raw_items:
+            page_activity = activity_signal_from_page(raw_items, max_items=max_items)
+            activity_signal = page_activity
+            if page_activity.page_saturated and raw_items:
                 oldest = raw_items[-1]
-                oldest_age_s: float | None = None
-                if oldest.published_at is not None:
-                    try:
-                        from datetime import datetime, timezone
-
-                        pub = oldest.published_at
-                        if pub.tzinfo is None:
-                            pub = pub.replace(tzinfo=timezone.utc)
-                        oldest_age_s = (
-                            datetime.now(timezone.utc) - pub
-                        ).total_seconds()
-                    except Exception:  # noqa: BLE001
-                        oldest_age_s = None
                 log.info(
                     "catalog_page_full",
                     query=query,
@@ -223,7 +254,9 @@ def scrape_search_once(
                     found=len(raw_items),
                     oldest_vinted_id=oldest.vinted_id,
                     oldest_age_seconds=(
-                        round(oldest_age_s, 1) if oldest_age_s is not None else None
+                        round(page_activity.oldest_age_seconds, 1)
+                        if page_activity.oldest_age_seconds is not None
+                        else None
                     ),
                     hint="page1 saturée — risque de miss si revisit trop lent",
                 )
@@ -330,6 +363,7 @@ def scrape_search_once(
             bootstrap=True,
             scrape_run_id=run_id,
             items=items,
+            activity=activity_signal,
         )
 
     # Live : annonces pas encore postées parmi la page courante (inserts + déjà en DB).
@@ -561,6 +595,7 @@ def scrape_search_once(
         bootstrap=False,
         scrape_run_id=run_id,
         items=items,
+        activity=activity_signal,
     )
 
 

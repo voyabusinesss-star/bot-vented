@@ -7,7 +7,12 @@ from threading import Thread
 
 from vinted_bot.config_loader import SearchTarget
 from vinted_bot.jobs.scrape_workers import (
+    TargetActivity,
+    _activity_hotness,
+    _adaptive_poll_interval,
     _filter_inject_batch_size,
+    _pick_due_target,
+    _target_key,
     partition_targets,
 )
 from vinted_bot.utils.proxy import (
@@ -93,6 +98,68 @@ def test_filter_inject_batch_size_caps_load() -> None:
     assert _filter_inject_batch_size(1) == 1
     assert _filter_inject_batch_size(8) == 2
     assert _filter_inject_batch_size(20) == 3
+
+
+def test_adaptive_poll_interval_speeds_up_hot_page() -> None:
+    from vinted_bot.services.scrape_search import ScrapeActivitySignal
+
+    target = _target("nike", "high")
+    hot = ScrapeActivitySignal(
+        newest_age_seconds=8.0,
+        oldest_age_seconds=25.0,
+        page_saturated=True,
+    )
+    assert _adaptive_poll_interval(target, hot) <= 4.0
+
+
+def test_activity_hotness_prefers_fresh_listings() -> None:
+    cold = TargetActivity(newest_age_s=800.0, updated_at=100.0)
+    hot = TargetActivity(
+        newest_age_s=15.0,
+        oldest_age_s=40.0,
+        page_saturated=True,
+        items_created=2,
+        updated_at=100.0,
+    )
+    now = 100.0
+    assert _activity_hotness(hot, now=now) > _activity_hotness(cold, now=now)
+
+
+def test_activity_hotness_unprobed_is_low_vs_hot_market() -> None:
+    hot = TargetActivity(
+        newest_age_s=8.0,
+        page_saturated=True,
+        oldest_age_s=20.0,
+        updated_at=500.0,
+    )
+    assert _activity_hotness(None, now=500.0) < _activity_hotness(hot, now=500.0)
+
+
+def test_activity_hotness_decays_between_scrapes() -> None:
+    act = TargetActivity(newest_age_s=10.0, page_saturated=True, updated_at=100.0)
+    assert _activity_hotness(act, now=100.0) > _activity_hotness(act, now=400.0)
+
+
+def test_pick_due_same_list_order_irrelevant_with_activity() -> None:
+    targets = [_target("acne studios", "high"), _target("nike", "high")]
+    now = 500.0
+    next_run = {_target_key(t): now - 1.0 for t in targets}
+    activity = {
+        _target_key(targets[1]): TargetActivity(
+            newest_age_s=10.0,
+            page_saturated=True,
+            oldest_age_s=30.0,
+            updated_at=now,
+        ),
+        _target_key(targets[0]): TargetActivity(
+            newest_age_s=600.0,
+            updated_at=now,
+        ),
+    }
+    a = _pick_due_target(targets, next_run, now=now, activity=activity)
+    b = _pick_due_target(list(reversed(targets)), next_run, now=now, activity=activity)
+    assert a is not None and b is not None
+    assert a.brand == b.brand == "nike"
 
 
 def test_brand_worker_backoff_flag() -> None:

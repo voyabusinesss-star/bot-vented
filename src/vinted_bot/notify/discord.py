@@ -294,6 +294,31 @@ def belongs_in_all_vetement(
     return is_classique_brand(brand) and normalize_brand(brand) not in LUXE_BRANDS
 
 
+def should_mirror_listing_to_all_vetement(
+    brand: str | None,
+    *,
+    is_shoe: bool,
+    brand_channel_id: str | None = None,
+    sneaker_channel_ids: set[str] | None = None,
+    exclude_brand_channel_ids: frozenset[str] | None = None,
+    settings: Settings | None = None,
+) -> bool:
+    """True si l'annonce doit aussi partir dans #all-vetement (opt-in via config)."""
+    cfg = settings or get_settings()
+    if not cfg.discord_mirror_all_vetement:
+        return False
+    all_channel = sanitize_discord_channel_id(cfg.discord_channel_all)
+    if not all_channel or all_channel == brand_channel_id:
+        return False
+    return belongs_in_all_vetement(
+        brand,
+        is_shoe=is_shoe,
+        brand_channel_id=brand_channel_id,
+        sneaker_channel_ids=sneaker_channel_ids,
+        exclude_brand_channel_ids=exclude_brand_channel_ids,
+    )
+
+
 def _raw(listing: Listing) -> dict[str, Any]:
     return listing.raw_json if isinstance(listing.raw_json, dict) else {}
 
@@ -956,21 +981,17 @@ class DiscordNotifier:
         self.post_message(brand_channel_id, payload)
 
         all_channel = sanitize_discord_channel_id(self.settings.discord_channel_all)
-        # Salon indémodable → toujours #all-vetement (hors chaussure / sneakers / luxe)
-        mirror_all = (
-            bool(all_channel)
-            and all_channel != brand_channel_id
-            and belongs_in_all_vetement(
-                listing.brand,
-                is_shoe=is_shoe,
-                brand_channel_id=brand_channel_id,
-                sneaker_channel_ids=sneaker_ids,
-                exclude_brand_channel_ids=all_vetement_mirror_exclude_channels(
-                    self.settings
-                ),
-            )
+        mirror_all = should_mirror_listing_to_all_vetement(
+            listing.brand,
+            is_shoe=is_shoe,
+            brand_channel_id=brand_channel_id,
+            sneaker_channel_ids=sneaker_ids,
+            exclude_brand_channel_ids=all_vetement_mirror_exclude_channels(
+                self.settings
+            ),
+            settings=self.settings,
         )
-        if mirror_all:
+        if mirror_all and all_channel:
             try:
                 self.post_message(all_channel, payload)
             except Exception as exc:
@@ -979,7 +1000,7 @@ class DiscordNotifier:
                     vinted_id=listing.vinted_id,
                     error=str(exc),
                 )
-        elif all_channel and not mirror_all:
+        elif all_channel and not mirror_all and self.settings.discord_mirror_all_vetement:
             log.info(
                 "discord_all_vetement_skipped",
                 brand=listing.brand,
