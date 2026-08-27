@@ -32,6 +32,23 @@ _migrate() {
   echo "[railway] migrations ok"
 }
 
+_is_enabled() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+_idle_paused() {
+  name="$1"
+  enable_var="$2"
+  echo "[railway] ${name} en pause (${enable_var}=0) — relancer: ${enable_var}=1 puis redeploy"
+  while true; do
+    echo "[railway] ${name} paused — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    sleep 300
+  done
+}
+
 case "$ROLE" in
   api)
     _migrate
@@ -40,22 +57,37 @@ case "$ROLE" in
     ;;
 
   scrape)
-    # Pas de HTTP public requis — boucle scrape seule
-    echo "[railway] démarrage scrape public+privé (foreground)"
-    exec uv run vinted-bot scrape --loop
+    ENABLE_SCRAPE="${ENABLE_SCRAPE:-1}"
+    if _is_enabled "$ENABLE_SCRAPE"; then
+      echo "[railway] démarrage scrape public+privé (foreground)"
+      exec uv run vinted-bot scrape --loop
+    fi
+    _idle_paused "scrape" "ENABLE_SCRAPE"
     ;;
 
   detector)
-    echo "[railway] démarrage detector niches (foreground)"
-    exec uv run vinted-bot detector --loop
+    ENABLE_DETECTOR="${ENABLE_DETECTOR:-1}"
+    if _is_enabled "$ENABLE_DETECTOR"; then
+      echo "[railway] démarrage detector niches (foreground)"
+      exec uv run vinted-bot detector --loop
+    fi
+    _idle_paused "detector" "ENABLE_DETECTOR"
     ;;
 
   fiches)
-    echo "[railway] démarrage fiches produit (foreground)"
-    exec uv run vinted-bot fiches-produit --loop
+    ENABLE_FICHES="${ENABLE_FICHES:-1}"
+    if _is_enabled "$ENABLE_FICHES"; then
+      echo "[railway] démarrage fiches produit (foreground)"
+      exec uv run vinted-bot fiches-produit --loop
+    fi
+    _idle_paused "fiches" "ENABLE_FICHES"
     ;;
 
   niches)
+    ENABLE_NICHES="${ENABLE_NICHES:-${ENABLE_DETECTOR:-1}}"
+    if ! _is_enabled "$ENABLE_NICHES"; then
+      _idle_paused "niches" "ENABLE_NICHES (ou ENABLE_DETECTOR)"
+    fi
     # Boucle : DETECTOR (fenêtre) → FICHES (1 niche détectée, jamais repostée) → pause.
     # Dedup détecteur : market:opp:posted_keys · Dedup fiches : market:fiches:posted_keys
     # + skipped_keys (niches déjà examinées / inéligibles).

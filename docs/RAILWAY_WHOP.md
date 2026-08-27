@@ -15,7 +15,7 @@ detector --loop   → détecteur de niches
 fiches-produit    → fiches produit
 ```
 
-Désactiver un worker : `ENABLE_SCRAPE=0` / `ENABLE_DETECTOR=0` / `ENABLE_FICHES=0`.
+Désactiver un worker : `ENABLE_SCRAPE=0` / `ENABLE_DETECTOR=0` / `ENABLE_FICHES=0` (respecté par `APP_ROLE=scrape|detector|fiches|niches` — voir `docs/OPERATIONS_PAUSE.md`).
 
 ## Prérequis
 

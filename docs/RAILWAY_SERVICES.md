@@ -107,3 +107,7 @@ railway add --service bot-fiches --repo voyabusinesss-star/bot-vented --branch m
 Puis copier / référencer les variables depuis `bot-vented` (token Discord, channels, DB).
 
 Sur **bot-vented** uniquement : `APP_ROLE=api` (plus de scrape/detector/fiches dans le même container).
+
+## Pause temporaire (scrape / niches)
+
+Voir **`docs/OPERATIONS_PAUSE.md`**. Résumé : `ENABLE_SCRAPE=0` sur `bot-scrape`, `ENABLE_NICHES=0` (ou `ENABLE_DETECTOR=0`) sur `bot-detector`, puis redeploy. `bot-vented` + Postgres restent actifs.
