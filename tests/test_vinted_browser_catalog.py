@@ -28,6 +28,16 @@ def test_catalog_response_blocked_403() -> None:
     assert penalty == 90.0
 
 
+def test_catalog_response_blocked_404() -> None:
+    blocked, proxy_exhausted, penalty = _catalog_response_blocked(
+        404,
+        '<div class="u-text-center">page erreur vinted</div>',
+    )
+    assert blocked is True
+    assert proxy_exhausted is False
+    assert penalty == 90.0
+
+
 def test_catalog_error_backoff_proxy_exhausted() -> None:
     exc = CatalogFetchBlockedError(
         status=402,

@@ -42,7 +42,10 @@ class ScrapeBlockTracker:
             self.consecutive_thread_limit = 0
 
     def record_catalog_blocked(self, *, status: int, proxy_exhausted: bool) -> None:
-        if proxy_exhausted or status != 403:
+        if proxy_exhausted:
+            return
+        # 403/404 Vinted + 401 session morte → même recovery (redeploy IP)
+        if status not in {401, 403, 404}:
             return
         from vinted_bot.config import get_settings
 

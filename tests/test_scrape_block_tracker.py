@@ -61,6 +61,16 @@ def test_record_catalog_success_resets_consecutive_403() -> None:
     assert snap["last_catalog_ok_at"] is not None
 
 
+def test_record_catalog_blocked_counts_401_invalid_auth() -> None:
+    record_catalog_blocked(status=401)
+    assert consecutive_403_count() == 1
+
+
+def test_record_catalog_blocked_counts_404() -> None:
+    record_catalog_blocked(status=404)
+    assert consecutive_403_count() == 1
+
+
 def test_record_catalog_blocked_ignores_non_403() -> None:
     record_catalog_blocked(status=429)
     record_catalog_blocked(status=403, proxy_exhausted=True)

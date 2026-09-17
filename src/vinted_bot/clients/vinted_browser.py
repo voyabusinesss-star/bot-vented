@@ -103,9 +103,10 @@ def _catalog_response_blocked(status: int, body: str) -> tuple[bool, bool, float
     """(blocked, proxy_exhausted, penalty_seconds)."""
     body_lower = (body or "").lower()
     proxy_exhausted = status == 402 or "bandwidth limit" in body_lower
+    # 404 HTML (page erreur Vinted) = IP datacenter grillée, même recovery que 403
     blocked = (
         proxy_exhausted
-        or status in {403, 429}
+        or status in {403, 404, 429}
         or "rate_limit" in body_lower
     )
     if not blocked:
@@ -633,6 +634,10 @@ class VintedBrowser:
                     pass
                 log.warning("catalog_fetch_failed", status=status, body=body, via="request")
                 blocked, proxy_exhausted, penalty = _catalog_response_blocked(status, body)
+                auth_invalid = status == 401 and "invalid_authentication" in body.lower()
+                if auth_invalid and not blocked:
+                    blocked = True
+                    penalty = 90.0
                 if blocked:
                     self._last_catalog_http_blocked = True
                     self._proxy_bandwidth_exhausted = proxy_exhausted
