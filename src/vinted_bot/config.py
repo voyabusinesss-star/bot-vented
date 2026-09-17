@@ -205,6 +205,10 @@ class Settings(BaseSettings):
     railway_api_token: str = ""
     railway_service_id: str = ""
     railway_environment_id: str = ""
+    # Compte Vinted DÉDIÉ scrape (séparé autobuy / ton compte perso)
+    vinted_scrape_session: str = ""
+    vinted_scrape_login: str = ""
+    vinted_scrape_password: str = ""
 
     @field_validator("scrape_proxy_urls", mode="before")
     @classmethod

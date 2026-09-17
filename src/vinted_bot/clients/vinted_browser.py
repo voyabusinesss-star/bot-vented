@@ -397,6 +397,15 @@ class VintedBrowser:
                     "Chrome/122.0.0.0 Safari/537.36"
                 ),
             }
+            from vinted_bot.services.scrape_vinted_session import load_scrape_storage_state
+
+            storage_state = load_scrape_storage_state()
+            if storage_state is not None:
+                context_kwargs["storage_state"] = storage_state
+                log.info(
+                    "browser_scrape_session_loaded",
+                    cookies=len(storage_state.get("cookies") or []),
+                )
             context = browser.new_context(**context_kwargs)
             apply_vinted_stealth(context)
             page = context.new_page()
@@ -597,8 +606,33 @@ class VintedBrowser:
             except Exception:  # noqa: BLE001
                 pass
             return result
-        # 403/429 : ne pas retomber sur evaluate (crash Chromium + spiral force_stop)
+        # 403/429 sans session : pas d'evaluate (crash Chromium).
+        # Avec session bot + sans proxy : tenter evaluate (souvent débloque le catalogue).
+        from vinted_bot.services.scrape_vinted_session import scrape_session_configured
+
+        session_evaluate = scrape_session_configured()
+        try:
+            from vinted_bot.config import get_settings
+
+            session_evaluate = session_evaluate and not get_settings().scrape_proxy_urls
+        except Exception:  # noqa: BLE001
+            pass
+
         if getattr(self, "_last_catalog_http_blocked", False):
+            if session_evaluate:
+                result = self._fetch_catalog_via_evaluate(api_url)
+                if result is not None:
+                    self._last_catalog_http_blocked = False
+                    self._proxy_bandwidth_exhausted = False
+                    try:
+                        from vinted_bot.services.scrape_block_tracker import (
+                            record_catalog_success,
+                        )
+
+                        record_catalog_success()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return result
             log.warning(
                 "catalog_skip_evaluate_after_block",
                 reason=(
@@ -608,6 +642,18 @@ class VintedBrowser:
                 ),
             )
             return None
+        if session_evaluate:
+            result = self._fetch_catalog_via_evaluate(api_url)
+            if result is not None:
+                self._last_catalog_http_blocked = False
+                self._proxy_bandwidth_exhausted = False
+                try:
+                    from vinted_bot.services.scrape_block_tracker import record_catalog_success
+
+                    record_catalog_success()
+                except Exception:  # noqa: BLE001
+                    pass
+                return result
         # evaluate(fetch) = crash Chromium + gros bandwidth — API request only.
         log.warning("catalog_skip_evaluate", reason="request_only_mode")
         return None

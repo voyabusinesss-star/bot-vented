@@ -22,9 +22,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("hello", help="Vérifie que le projet démarre correctement")
     sub.add_parser("db-check", help="Vérifie la connexion PostgreSQL")
+    db_retention = sub.add_parser(
+        "db-retention",
+        help="Purge Postgres (anti-saturation volume 500 Mo)",
+    )
+    db_retention.add_argument(
+        "--emergency",
+        action="store_true",
+        help="Purge agressive immédiate (récupération DiskFull)",
+    )
     sub.add_parser(
         "db-seed",
         help="Insert/upsert une annonce de test (vérifie dedup vinted_id)",
+    )
+
+    scrape_session = sub.add_parser(
+        "scrape-session",
+        help="Connexion compte Vinted dédié scrape (IP Railway, pas ton Mac)",
+    )
+    scrape_session.add_argument(
+        "action",
+        choices=("bootstrap", "status"),
+        help="bootstrap = login Railway + save session ; status = vérif",
     )
 
     scrape = sub.add_parser(
@@ -383,6 +402,42 @@ def cmd_db_check(log) -> None:
     check_connection()
     log.info("db_ok", database_url=get_settings().database_url.split("@")[-1])
     print("OK — connexion PostgreSQL réussie")
+
+
+def cmd_db_retention(args, log) -> None:
+    from vinted_bot.jobs.db_retention import RetentionTier, run_db_retention_once
+
+    tier = RetentionTier.EMERGENCY if args.emergency else None
+    stats = run_db_retention_once(force_tier=tier)
+    log.info("db_retention_cli_done", **stats)
+    print(
+        f"OK — tier={stats.get('tier')} "
+        f"before={stats.get('db_mb_before')}Mo after={stats.get('db_mb_after')}Mo "
+        f"listings_deleted={stats.get('listings_deleted')}"
+    )
+
+
+def cmd_scrape_session(args, log) -> None:
+    from vinted_bot.services.scrape_vinted_session import (
+        bootstrap_scrape_session_from_credentials,
+        load_scrape_storage_state,
+        scrape_session_configured,
+    )
+
+    if args.action == "status":
+        ok = scrape_session_configured()
+        state = load_scrape_storage_state()
+        cookies = len((state or {}).get("cookies") or [])
+        print(f"scrape_session={'OK' if ok else 'MISSING'} cookies={cookies}")
+        return
+
+    ok = bootstrap_scrape_session_from_credentials(headless=True)
+    if not ok:
+        raise SystemExit(
+            "Échec bootstrap — définir VINTED_SCRAPE_LOGIN + VINTED_SCRAPE_PASSWORD "
+            "sur bot-scrape (compte Vinted DÉDIÉ, pas ton compte perso)."
+        )
+    print("OK — session scrape enregistrée (Postgres checkpoint, IP Railway).")
 
 
 def cmd_db_seed(log) -> None:
@@ -1666,6 +1721,12 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "db-check":
         cmd_db_check(log)
+        return
+    if args.command == "db-retention":
+        cmd_db_retention(args, log)
+        return
+    if args.command == "scrape-session":
+        cmd_scrape_session(args, log)
         return
     if args.command == "db-seed":
         cmd_db_seed(log)

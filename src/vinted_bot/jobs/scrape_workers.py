@@ -1209,6 +1209,11 @@ def run_permanent_scrape_pool(
 
     restore_block_tracker_from_checkpoint()
     warn_if_proxy_blocks_redeploy(component="scrape")
+
+    from vinted_bot.services.scrape_vinted_session import ensure_scrape_vinted_session
+
+    ensure_scrape_vinted_session(headless=headless)
+
     log.info(
         "permanent_pool_start",
         workers=len(groups),
