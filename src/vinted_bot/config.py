@@ -192,10 +192,14 @@ class Settings(BaseSettings):
     scrape_fast_mode: bool = False
     # Auto-redeploy Railway sur 403 Vinted (sans proxy)
     scrape_auto_redeploy_enabled: bool = False
-    scrape_403_redeploy_threshold: int = Field(default=8, ge=1, le=100)
+    scrape_403_redeploy_threshold: int = Field(default=3, ge=1, le=100)
     scrape_thread_redeploy_threshold: int = Field(default=3, ge=1, le=50)
-    scrape_auto_redeploy_cooldown_seconds: float = Field(default=900.0, ge=300.0)
+    scrape_auto_redeploy_cooldown_seconds: float = Field(default=300.0, ge=300.0)
     scrape_chromium_health_log_seconds: float = Field(default=300.0, ge=60.0)
+    # Rétention Postgres (volume Railway 500 Mo — ne jamais saturer)
+    db_volume_mb: int = Field(default=500, ge=100, le=2000)
+    db_retention_target_mb: int = Field(default=320, ge=50, le=1500)
+    db_retention_interval_seconds: float = Field(default=180.0, ge=60.0)
     # Plafond dur entre deux scrapes d'une même marque (0 = désactivé)
     scrape_max_revisit_seconds: float = Field(default=240.0, ge=0.0)
     railway_api_token: str = ""
@@ -213,6 +217,17 @@ class Settings(BaseSettings):
     def _ensure_poll_range(self) -> Self:
         if self.scrape_poll_seconds_max < self.scrape_poll_seconds_min:
             self.scrape_poll_seconds_max = self.scrape_poll_seconds_min
+        return self
+
+    @model_validator(mode="after")
+    def _warn_proxy_vs_auto_redeploy(self) -> Self:
+        if self.scrape_auto_redeploy_enabled and self.scrape_proxy_urls:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "SCRAPE_AUTO_REDEPLOY_ENABLED=1 but SCRAPE_PROXY_URLS is set — "
+                "auto-redeploy IP Railway is disabled until proxy is removed"
+            )
         return self
 
     discord_enabled: bool = True

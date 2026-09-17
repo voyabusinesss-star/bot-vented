@@ -91,3 +91,30 @@ def test_recent_403_window() -> None:
     assert snap["consecutive_403"] == 3
     assert snap["recent_403_10m"] == 3
     assert snap["total_403"] == 3
+
+
+@patch("vinted_bot.db.repositories.set_checkpoint")
+@patch("vinted_bot.db.repositories.get_checkpoint")
+@patch("vinted_bot.db.session.session_scope")
+def test_restore_block_tracker_from_checkpoint(
+    mock_session_scope, mock_get_checkpoint, mock_set_checkpoint
+) -> None:
+    from unittest.mock import MagicMock
+
+    from vinted_bot.services.scrape_block_tracker import restore_block_tracker_from_checkpoint
+    import time
+
+    now = time.time()
+    mock_session = MagicMock()
+    mock_session_scope.return_value.__enter__.return_value = mock_session
+    mock_get_checkpoint.return_value = {
+        "consecutive_403": 5,
+        "total_403": 12,
+        "last_403_at": now - 30,
+        "recent_403_at": [now - 60, now - 30, now - 10],
+    }
+
+    restore_block_tracker_from_checkpoint()
+
+    assert consecutive_403_count() == 5
+    assert tracker_snapshot()["recent_403_10m"] == 3

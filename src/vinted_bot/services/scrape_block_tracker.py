@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 _lock = threading.Lock()
+_BLOCK_TRACKER_CHECKPOINT = "scrape_ops:block_tracker"
+_RECENT_WINDOW_SECONDS = 600.0
 
 
 def is_thread_limit_error(exc: BaseException | str) -> bool:
@@ -35,6 +37,7 @@ class ScrapeBlockTracker:
         with _lock:
             self.consecutive_403 = 0
             self.last_catalog_ok_at = now
+            _persist_block_tracker_locked()
 
     def record_scrape_cycle_success(self) -> None:
         """Reset compteur thread limit après un scrape marque réussi."""
@@ -57,8 +60,9 @@ class ScrapeBlockTracker:
             self.total_403 += 1
             self.last_403_at = now
             self._recent_403_at.append(now)
-            cutoff = now - 600.0
+            cutoff = now - _RECENT_WINDOW_SECONDS
             self._recent_403_at = [t for t in self._recent_403_at if t >= cutoff]
+            _persist_block_tracker_locked()
 
     def record_thread_limit_error(
         self,
@@ -123,6 +127,51 @@ class ScrapeBlockTracker:
 
 
 _tracker = ScrapeBlockTracker()
+
+
+def _persist_block_tracker_locked() -> None:
+    """Persiste le compteur blocages — survit aux redeploy Railway (Postgres)."""
+    try:
+        from vinted_bot.db.repositories import set_checkpoint
+        from vinted_bot.db.session import session_scope
+
+        with session_scope() as session:
+            set_checkpoint(
+                session,
+                _BLOCK_TRACKER_CHECKPOINT,
+                {
+                    "consecutive_403": _tracker.consecutive_403,
+                    "total_403": _tracker.total_403,
+                    "last_403_at": _tracker.last_403_at,
+                    "recent_403_at": list(_tracker._recent_403_at),
+                },
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def restore_block_tracker_from_checkpoint() -> None:
+    """Recharge le compteur après redeploy (sinon reset mémoire = jamais le seuil)."""
+    try:
+        from vinted_bot.db.repositories import get_checkpoint
+        from vinted_bot.db.session import session_scope
+
+        with session_scope() as session:
+            data = get_checkpoint(session, _BLOCK_TRACKER_CHECKPOINT)
+        if not data:
+            return
+        now = time.time()
+        cutoff = now - _RECENT_WINDOW_SECONDS
+        raw_recent = data.get("recent_403_at") or []
+        recent = [float(t) for t in raw_recent if float(t) >= cutoff]
+        with _lock:
+            _tracker.consecutive_403 = int(data.get("consecutive_403") or 0)
+            _tracker.total_403 = int(data.get("total_403") or 0)
+            last = data.get("last_403_at")
+            _tracker.last_403_at = float(last) if last is not None else None
+            _tracker._recent_403_at = recent
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def record_catalog_success() -> None:

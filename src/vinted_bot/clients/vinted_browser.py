@@ -638,6 +638,16 @@ class VintedBrowser:
                 if auth_invalid and not blocked:
                     blocked = True
                     penalty = 90.0
+                if blocked and not proxy_exhausted:
+                    from vinted_bot.config import get_settings
+
+                    settings = get_settings()
+                    if (
+                        settings.scrape_auto_redeploy_enabled
+                        and not settings.scrape_proxy_urls
+                    ):
+                        # Sans proxy : cycles plus rapides → seuil redeploy atteint plus tôt.
+                        penalty = min(penalty, 20.0)
                 if blocked:
                     self._last_catalog_http_blocked = True
                     self._proxy_bandwidth_exhausted = proxy_exhausted

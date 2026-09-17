@@ -1204,6 +1204,11 @@ def run_permanent_scrape_pool(
     all_targets = active_searches_for_channels(channel_map, sneaker_map=sneaker_map)
     groups = partition_targets(all_targets, n_workers)
 
+    from vinted_bot.services.railway_redeploy import warn_if_proxy_blocks_redeploy
+    from vinted_bot.services.scrape_block_tracker import restore_block_tracker_from_checkpoint
+
+    restore_block_tracker_from_checkpoint()
+    warn_if_proxy_blocks_redeploy(component="scrape")
     log.info(
         "permanent_pool_start",
         workers=len(groups),
@@ -1213,6 +1218,7 @@ def run_permanent_scrape_pool(
         proxies=len(proxies),
         group_sizes=[len(g) for g in groups],
         filter_worker=filter_enabled,
+        auto_redeploy=settings.scrape_auto_redeploy_enabled,
     )
     write_scrape_heartbeat(
         cycle=0,
@@ -1248,10 +1254,9 @@ def run_permanent_scrape_pool(
     )
     flush_worker.start()
 
-    from vinted_bot.jobs.db_retention import DbRetentionWorker
+    from vinted_bot.jobs.db_retention import ensure_db_retention_worker
 
-    retention_worker = DbRetentionWorker(interval_seconds=300.0)
-    retention_worker.start()
+    retention_worker = ensure_db_retention_worker()
 
     filter_worker: FilterWorker | None = None
     if filter_enabled:
