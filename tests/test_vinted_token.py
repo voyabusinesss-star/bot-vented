@@ -30,6 +30,18 @@ def test_parse_storage_state_json() -> None:
     assert state["cookies"][0]["value"] == "x"
 
 
+def test_parse_refresh_jwt_uses_refresh_cookie_name() -> None:
+    # header.payload.sig — payload {"purpose":"refresh"} en base64url
+    import base64
+
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"purpose": "refresh"}).encode()
+    ).decode().rstrip("=")
+    token = f"aaa.{payload}.bbb"
+    state = parse_vinted_token_to_storage_state(token)
+    assert state["cookies"][0]["name"] == "refresh_token_web"
+
+
 def test_parse_empty_raises() -> None:
     with pytest.raises(VintedTokenError):
         parse_vinted_token_to_storage_state("   ")

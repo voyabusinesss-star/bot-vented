@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 from typing import Any
@@ -15,6 +16,11 @@ _ACCESS_TOKEN_RE = re.compile(
     r"(?:access_token_web\s*[=:]\s*)([^\s;\"']+)",
     re.IGNORECASE,
 )
+_REFRESH_TOKEN_RE = re.compile(
+    r"(?:refresh_token_web\s*[=:]\s*)([^\s;\"']+)",
+    re.IGNORECASE,
+)
+_REFRESH_LABEL_RE = re.compile(r"^refresh\s*token\s*web\s*", re.IGNORECASE)
 
 
 def _cookie(
@@ -32,11 +38,27 @@ def _cookie(
     }
 
 
+def _jwt_cookie_name(token: str) -> str:
+    parts = (token or "").split(".")
+    if len(parts) < 3:
+        return "access_token_web"
+    try:
+        payload_b64 = parts[1]
+        padded = payload_b64 + "=" * (-len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded))
+        if payload.get("purpose") == "refresh":
+            return "refresh_token_web"
+    except Exception:  # noqa: BLE001
+        pass
+    return "access_token_web"
+
+
 def storage_state_from_access_token(token: str) -> dict[str, Any]:
     value = (token or "").strip()
     if not value:
         raise VintedTokenError("Token vide.")
-    return {"cookies": [_cookie(name="access_token_web", value=value)], "origins": []}
+    name = _jwt_cookie_name(value)
+    return {"cookies": [_cookie(name=name, value=value)], "origins": []}
 
 
 def parse_vinted_token_to_storage_state(raw: str) -> dict[str, Any]:
@@ -50,6 +72,7 @@ def parse_vinted_token_to_storage_state(raw: str) -> dict[str, Any]:
     text = (raw or "").strip()
     if not text:
         raise VintedTokenError("Colle ton token Vinted dans le formulaire.")
+    text = _REFRESH_LABEL_RE.sub("", text).strip()
 
     # Code court généré par la page /token (session complète)
     try:
@@ -80,6 +103,10 @@ def parse_vinted_token_to_storage_state(raw: str) -> dict[str, Any]:
     match = _ACCESS_TOKEN_RE.search(text)
     if match:
         return storage_state_from_access_token(match.group(1))
+
+    match_refresh = _REFRESH_TOKEN_RE.search(text)
+    if match_refresh:
+        return storage_state_from_access_token(match_refresh.group(1))
 
     # Valeur brute (souvent JWT / opaque token sans espaces)
     if "\n" in text or " " in text.strip():
