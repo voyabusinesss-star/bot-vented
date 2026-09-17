@@ -31,8 +31,8 @@ def test_parse_storage_state_json() -> None:
 
 
 def test_parse_refresh_jwt_uses_refresh_cookie_name() -> None:
-    # header.payload.sig — payload {"purpose":"refresh"} en base64url
     import base64
+    import json
 
     payload = base64.urlsafe_b64encode(
         json.dumps({"purpose": "refresh"}).encode()
